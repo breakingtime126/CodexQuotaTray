@@ -4,6 +4,15 @@
 
 [下载与版本](https://github.com/breakingtime126/CodexQuotaTray/releases) · [自动更新说明](docs/automatic-updates.md) · [问题反馈](https://github.com/breakingtime126/CodexQuotaTray/issues)
 
+## 界面预览
+
+<p>
+  <img src="docs/images/preview-light.png" width="300" alt="浅色界面示例：演示额度、重置卡和输出速度；预览字体与 Windows 实际显示略有差异">
+  <img src="docs/images/preview-dark.png" width="300" alt="深色界面示例：演示额度、重置卡和输出速度；预览字体与 Windows 实际显示略有差异">
+</p>
+
+*界面示例（演示数据）*
+
 ## 主要功能
 
 - **额度一眼可见**：托盘数字与悬停卡显示剩余额度、账号重置时间和重置卡到期时间。
