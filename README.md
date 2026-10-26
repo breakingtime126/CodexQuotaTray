@@ -24,7 +24,7 @@
 
 ## 下载与开始使用
 
-> 首个正式版本仍在准备中；可下载版本以 [Releases](https://github.com/breakingtime126/CodexQuotaTray/releases) 为准。
+> 当前版本：[v0.2.34.0](https://github.com/breakingtime126/CodexQuotaTray/releases/tag/v0.2.34.0)。在版本附件中下载 `CodexQuotaTray.exe`。
 
 **运行要求**
 
