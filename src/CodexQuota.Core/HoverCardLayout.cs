@@ -6,7 +6,6 @@ public static class HoverCardLayout
     public const float Width = 280, Shadow = 10, Padding = 18, TicketHeight = 28, HeaderHeight = 42;
     public const float QuotaHeight = 104, CompactQuotaHeight = 138, CardsHeaderHeight = 28, CornerRadius = 18;
     public const float ColumnGap = 12;
-    public const float UpdateNoticeHeight = 28;
     public const float OutputSpeedHeight = 32;
     public const float ResetFeedRowHeight = 25;
     public const float ResetRowTop = 77, ResetRowHeight = 26;
@@ -25,7 +24,6 @@ public static class HoverCardLayout
     public static float ResetFeedHeight(HoverCardModel model) =>
         ((model.ResetFeed?.Latest is null ? 0 : 1) + (model.ResetFeed?.Forecast is null ? 0 : 1)) * ResetFeedRowHeight;
     public static float ContentHeight(HoverCardModel model) => HeaderHeight +
-        (model.UpdateNotice is null ? 0 : UpdateNoticeHeight) +
         QuotasHeight(model) + ResetFeedHeight(model) + CardsHeaderHeight +
         model.Cards.Count * TicketHeight + (model.CardNote.Length > 0 ? 28 : 0) +
         (model.Status.Length > 0 ? model.LastSuccess.Length > 0 ? 54 : 34 : 0) +

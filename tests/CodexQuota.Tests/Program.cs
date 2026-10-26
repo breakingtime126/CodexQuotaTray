@@ -17,7 +17,6 @@ void Test(string name, Action body) => tests.Add((name, () => { body(); return T
 void AsyncTest(string name, Func<Task> body) => tests.Add((name, body));
 UpdateManifestTests.Register(Test);
 UpdateDownloadTests.Register(Test, AsyncTest);
-UpdateNoticeTests.Register(Test);
 
 Test("parser: Codex map wins over legacy and unrelated buckets", () =>
 {

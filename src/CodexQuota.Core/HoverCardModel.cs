@@ -20,7 +20,6 @@ public sealed record HoverCardModel(IReadOnlyList<HoverQuota> Quotas, HoverQuota
     IReadOnlyList<HoverTicket> Cards, string CardNote, bool CardsStale, string Status, string LastSuccess,
     string AccessibleText)
 {
-    public UpdateNoticeView? UpdateNotice { get; init; }
     public OutputSpeedView? OutputSpeed { get; init; }
     public ResetFeedPresentation? ResetFeed { get; init; }
     // This is the successful quota read, never the completion time of the TPS sample.

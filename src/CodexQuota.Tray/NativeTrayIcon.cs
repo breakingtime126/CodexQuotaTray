@@ -213,8 +213,8 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
             _hoverPopup.ContextMenuRequested += (_, _) => ShowMenu();
             _hoverPopup.LinkActivated += link =>
             {
-                // External links hand control to the browser; in-app updates keep progress visible.
-                if (link.Url.Length > 0) CloseHoverPopup(suppress: true);
+                // Dispose and suppress before handing control to an external browser.
+                CloseHoverPopup(suppress: true);
                 LinkActivated?.Invoke(link);
             };
         }
