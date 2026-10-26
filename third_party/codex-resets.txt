@@ -1,0 +1,16 @@
+Codex Resets public API attribution
+=================================
+
+Public reset announcements, observations and third-party forecasts displayed by
+the optional reset-information feature are provided by Codex Resets:
+https://codex-resets.com/
+
+API documentation: https://codex-resets.com/api/docs
+API schema: https://codex-resets.com/api/openapi.json
+
+The labels of the displayed rows link to Codex Resets; tooltips and accessibility
+text identify the data source. The values link to validated original Tibo posts
+when a usable source URL is supplied. No API key or user account data is sent.
+
+These records are not personal account reset times. Predictions are not an
+OpenAI commitment. This application is not affiliated with Codex Resets or OpenAI.

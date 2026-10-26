@@ -1,0 +1,2 @@
+*.cmd.template text eol=crlf
+*.ps1.template text eol=crlf

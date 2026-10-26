@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><RollForward>Major</RollForward></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/CodexQuota.Core/CodexQuota.Core.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../../src/CodexQuota.Tray/TrayPopupSession.cs" Link="TrayPopupSession.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../../src/CodexQuota.Tray/TrayMenuPlacement.cs" Link="TrayMenuPlacement.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../../src/CodexQuota.Tray/TrayIconRegistration.cs" Link="TrayIconRegistration.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../../src/CodexQuota.Tray/TrayHoverPolicy.cs" Link="TrayHoverPolicy.cs" /></ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/CodexQuota.Tray/TrayVisibilityClient.cs" Link="TrayVisibilityClient.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TrayVisibilityHelper.cs" Link="TrayVisibilityHelper.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,21 @@
+**/bin/
+**/obj/
+.vs/
+artifacts/
+*.user
+*.log
+
+__pycache__/
+*.pyc
+
+vendor/
+native/quota-reader/target/
+native/quota-reader/dist/
+
+# Local update transactions and signing material are never source artifacts.
+.cqt-update-*/
+private-update-signing/
+*-private.pem
+*.pfx
+*.p12
+test-output.txt

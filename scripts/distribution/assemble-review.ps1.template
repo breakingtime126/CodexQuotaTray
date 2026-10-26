@@ -1,0 +1,22 @@
+# Readable reference for the exact inline command used by assemble.cmd.
+# Review only; double-click assemble.cmd to run the package helper.
+$ErrorActionPreference = 'Stop';
+$root = $env:CQT_PACKAGE_DIR;
+$parts = @('CodexQuotaTray.part1.bin','CodexQuotaTray.part2.bin','CodexQuotaTray.part3.bin','CodexQuotaTray.part4.bin');
+foreach ($name in $parts) { if (!(Test-Path -LiteralPath (Join-Path $root $name) -PathType Leaf)) { throw ('Missing part: ' + $name + '. Extract all four ZIP packages into this same folder first.') } };
+$zip = Join-Path $root 'CodexQuotaTray-win-x64.zip';
+$temp = Join-Path $root 'CodexQuotaTray-win-x64.assembling.zip';
+$destination = Join-Path $root 'CodexQuotaTray';
+foreach ($target in @($zip,$temp,$destination)) { if (Test-Path -LiteralPath $target) { throw 'An output already exists. Use a new empty folder to avoid overwriting any files.' } };
+$created = $false;
+try {
+  $stream = [IO.File]::Open($temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); $created = $true;
+  try { foreach ($name in $parts) { $sourceStream = [IO.File]::OpenRead((Join-Path $root $name)); try { $sourceStream.CopyTo($stream) } finally { $sourceStream.Dispose() } } } finally { $stream.Dispose() };
+  Write-Host 'Checking SHA256...';
+  if (([BitConverter]::ToString(([Security.Cryptography.SHA256]::Create()).ComputeHash([IO.File]::ReadAllBytes($temp))).Replace('-','')) -ne '__ZIP_SHA256__') { throw 'SHA256 mismatch. Download the four parts again; no app was extracted.' };
+  Move-Item -LiteralPath $temp -Destination $zip; $created = $false;
+  Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::ExtractToDirectory($zip,$destination);
+  Write-Host 'Verified and extracted successfully.';
+  Write-Host ('Open this folder, then run CodexQuotaTray.exe when ready: ' + $destination);
+  Write-Host 'The app has NOT been started. No startup or system settings were changed.';
+} finally { if ($created -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp } };
