@@ -8,7 +8,12 @@ using System.Text.Json;
 namespace CodexQuota.Core;
 
 /// <summary>Only public cache metadata crosses the local PowerShell boundary, never an arbitrary URL.</summary>
-public sealed record ResetFeedFileRequest(string RequestId, DateTimeOffset StartedAtUtc, string? ETag);
+public enum ResetFeedSource { Mirror, Upstream }
+
+public sealed record ResetFeedFileRequest(string RequestId, DateTimeOffset StartedAtUtc, string? ETag)
+{
+    public ResetFeedSource Source { get; init; } = ResetFeedSource.Mirror;
+}
 
 public enum ResetFeedFileFailure
 {

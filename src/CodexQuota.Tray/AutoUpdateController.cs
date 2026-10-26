@@ -11,7 +11,7 @@ internal sealed class AutoUpdateController : IDisposable
     private const string Settings = @"Software\CodexQuotaTray";
     private readonly ToolStripMenuItem _automatic = new("自动更新") { CheckOnClick = false };
     private readonly ToolStripMenuItem _check = new("检查更新");
-    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 15000 };
+    private readonly System.Windows.Forms.Timer _timer = new() { Interval = UpdateCheckSchedule.StartupDelayMilliseconds };
     private readonly CancellationTokenSource _stop = new();
     private readonly string? _cli;
     private readonly Func<Task> _exit;
@@ -24,9 +24,7 @@ internal sealed class AutoUpdateController : IDisposable
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(Settings);
-            _automatic.Checked = key?.GetValue("AutoUpdateEnabled") is not int enabled || enabled != 0;
-            if (key?.GetValue("UpdateLastCheckUtc") is string last && DateTimeOffset.TryParse(last, out var checkedAt))
-                _nextCheck = checkedAt.AddHours(6);
+            _automatic.Checked = UpdateCheckSchedule.IsAutomaticEnabled(key?.GetValue("AutoUpdateEnabled"));
         }
         catch { _automatic.Checked = false; _check.ToolTipText = "无法读取自动更新设置，自动更新暂未开启。"; }
         _automatic.Click += (_, _) =>
@@ -44,7 +42,7 @@ internal sealed class AutoUpdateController : IDisposable
         menu.Add(_automatic); menu.Add(_check);
         _timer.Tick += async (_, _) =>
         {
-            if (_automatic.Checked && DateTimeOffset.UtcNow >= _nextCheck) await CheckAsync(manual: false);
+            if (UpdateCheckSchedule.IsDue(_automatic.Checked, DateTimeOffset.UtcNow, _nextCheck)) await CheckAsync(manual: false);
         };
         _timer.Start();
     }
@@ -107,7 +105,7 @@ internal sealed class AutoUpdateController : IDisposable
         }
         finally
         {
-            _nextCheck = DateTimeOffset.UtcNow.AddHours(6);
+            _nextCheck = UpdateCheckSchedule.AfterCheck(DateTimeOffset.UtcNow);
             try { using var key = Registry.CurrentUser.CreateSubKey(Settings); key?.SetValue("UpdateLastCheckUtc", DateTimeOffset.UtcNow.ToString("O")); } catch { }
             if (!handedOff && staging is not null)
             {

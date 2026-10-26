@@ -9,49 +9,59 @@ namespace CodexQuota.Core;
 public sealed class ResetFeedClient : IDisposable
 {
     public static readonly Uri Endpoint = new("https://raw.githubusercontent.com/breakingtime126/CodexQuotaTray/reset-data/status.json");
+    public static readonly Uri UpstreamEndpoint = new("https://codex-resets.com/api/v1/status");
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(12);
     private readonly Func<string?, CancellationToken, Task<HttpResponseMessage>> _read;
     private readonly IDisposable _owner;
     private readonly TimeSpan _timeout;
     private readonly ResetFeedTransport _transport;
     private readonly bool _requireMirror;
+    private readonly bool _requireUpstreamFreshness, _disableCache;
+    private readonly ResetFeedClient? _upstream, _fallback;
     private readonly Func<DateTimeOffset> _utcNow = () => DateTimeOffset.UtcNow;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ResetFeedSnapshot? _cache;
     private EntityTagHeaderValue? _etag;
     private int _disposed;
 
-    public ResetFeedClient() : this(CreateFileHandler()) { }
+    public ResetFeedClient() : this(CreateSource(ResetFeedSource.Upstream), CreateSource(ResetFeedSource.Mirror)) { }
 
-    private ResetFeedClient(PowerShellResetFeedHandler fileHandler)
+    // Each source gets its own bounded attempt. Only a fully parsed, fresh upstream result wins.
+    internal ResetFeedClient(ResetFeedClient upstream, ResetFeedClient fallback)
     {
-        _read = fileHandler.ReadAsync;
-        _owner = fileHandler;
+        _upstream = upstream;
+        _fallback = fallback;
+        _read = null!;
+        _owner = upstream;
         _timeout = DefaultTimeout;
-        _transport = ResetFeedTransport.PowerShell7Json;
-        _requireMirror = true;
     }
 
-    private static PowerShellResetFeedHandler CreateFileHandler()
+    private static ResetFeedClient CreateSource(ResetFeedSource source)
     {
         var runner = new PowerShellResetFeedRunner(AppDomain.CurrentDomain.BaseDirectory);
-        return new PowerShellResetFeedHandler(runner.FetchAsync, owner: runner);
+        return new ResetFeedClient(new PowerShellResetFeedHandler(runner.FetchAsync, owner: runner, source: source),
+            transport: ResetFeedTransport.PowerShell7Json, requireMirror: source == ResetFeedSource.Mirror,
+            requireUpstreamFreshness: source == ResetFeedSource.Upstream, disableCache: true,
+            endpoint: source == ResetFeedSource.Upstream ? UpstreamEndpoint : Endpoint);
     }
 
     /// <summary>Internal synthetic-response seam only. No built-in direct network handler exists.</summary>
     internal ResetFeedClient(HttpMessageHandler handler, TimeSpan? timeout = null,
-        ResetFeedTransport transport = ResetFeedTransport.Injected, bool requireMirror = false, Func<DateTimeOffset>? utcNow = null)
+        ResetFeedTransport transport = ResetFeedTransport.Injected, bool requireMirror = false, Func<DateTimeOffset>? utcNow = null,
+        bool requireUpstreamFreshness = false, bool disableCache = false, Uri? endpoint = null)
     {
         _timeout = timeout ?? DefaultTimeout;
         _transport = transport;
         _requireMirror = requireMirror;
+        _requireUpstreamFreshness = requireUpstreamFreshness;
+        _disableCache = disableCache;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         if (_timeout <= TimeSpan.Zero || _timeout > TimeSpan.FromMinutes(2)) throw new ArgumentOutOfRangeException(nameof(timeout));
         var invoker = new HttpMessageInvoker(handler, disposeHandler: true);
         _owner = invoker;
         _read = async (etag, token) =>
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, Endpoint);
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint ?? Endpoint);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, MaxAge = TimeSpan.Zero };
             request.Headers.Pragma.ParseAdd("no-cache");
@@ -62,6 +72,30 @@ public sealed class ResetFeedClient : IDisposable
 
     public async Task<ResetFeedReadResult> FetchAsync(CancellationToken cancellationToken = default)
     {
+        if (_upstream is not null)
+        {
+            using var total = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            total.CancelAfter(TimeSpan.FromSeconds(24));
+            var enteredChain = false;
+            ResetFeedReadResult Stopped() => new(cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0
+                ? ResetFeedReadStatus.Cancelled : ResetFeedReadStatus.Timeout, Diagnostic:
+                new(ResetFeedStage.Waiting, cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0
+                    ? ResetFeedFailure.Cancelled : ResetFeedFailure.Timeout, null, 0, Transport: ResetFeedTransport.PowerShell7Json));
+            try
+            {
+                if (Volatile.Read(ref _disposed) != 0) return Stopped();
+                await _gate.WaitAsync(total.Token).ConfigureAwait(false);
+                enteredChain = true;
+                if (Volatile.Read(ref _disposed) != 0) return Stopped();
+                var primary = await _upstream.FetchAsync(total.Token).ConfigureAwait(false);
+                if (total.IsCancellationRequested) return Stopped();
+                if (primary.IsSuccess || primary.Status == ResetFeedReadStatus.Cancelled) return primary;
+                var fallback = await _fallback!.FetchAsync(total.Token).ConfigureAwait(false);
+                return total.IsCancellationRequested ? Stopped() : fallback;
+            }
+            catch (OperationCanceledException) { return Stopped(); }
+            finally { if (enteredChain) _gate.Release(); }
+        }
         var clock = Stopwatch.StartNew();
         var stage = ResetFeedStage.Waiting;
         int? httpStatus = null;
@@ -81,7 +115,7 @@ public sealed class ResetFeedClient : IDisposable
             await _gate.WaitAsync(deadline.Token).ConfigureAwait(false);
             entered = true;
             stage = ResetFeedStage.Request;
-            var pendingResponse = _read(_etag?.ToString(), deadline.Token);
+            var pendingResponse = _read(_disableCache ? null : _etag?.ToString(), deadline.Token);
             try { await AsyncCompatibility.WaitAsync(pendingResponse, deadline.Token).ConfigureAwait(false); }
             catch
             {
@@ -97,7 +131,7 @@ public sealed class ResetFeedClient : IDisposable
             stage = ResetFeedStage.Headers;
             httpStatus = (int)response.StatusCode;
             if (response.StatusCode == HttpStatusCode.NotModified)
-                return _cache is not null && _etag is not null &&
+                return !_disableCache && _cache is not null && _etag is not null &&
                     (!_requireMirror || _cache.UpstreamSuccessAtUtc is { } success && ResetFeedMirror.IsFresh(success, _utcNow())) &&
                     (response.Headers.ETag is not { } responseTag || responseTag.Tag == _etag.Tag)
                     ? Finish(ResetFeedReadStatus.NotModified, _cache)
@@ -146,9 +180,16 @@ public sealed class ResetFeedClient : IDisposable
             if (!(_requireMirror ? ResetFeedMirror.TryParse(body.ToArray(), _utcNow(), out snapshot) :
                 ResetFeedParser.TryParse(body.ToArray(), out snapshot)))
                 return Finish(ResetFeedReadStatus.InvalidResponse, failure: ResetFeedFailure.InvalidSchema);
+            if (_requireUpstreamFreshness)
+            {
+                if (!ResetFeedMirror.IsFresh(snapshot!.GeneratedAt, _utcNow()))
+                    return Finish(ResetFeedReadStatus.InvalidResponse, failure: ResetFeedFailure.InvalidSchema);
+                // Direct API age is its own generated_at, not the mirror's upstream success timestamp.
+                snapshot = snapshot with { DirectGeneratedAtUtc = snapshot.GeneratedAt };
+            }
             _cache = snapshot;
             var etag = response.Headers.ETag;
-            _etag = etag is not null && etag.ToString().Length <= 256 ? etag : null;
+            _etag = !_disableCache && etag is not null && etag.ToString().Length <= 256 ? etag : null;
             stage = ResetFeedStage.Complete;
             return Finish(ResetFeedReadStatus.Success, snapshot);
         }
@@ -190,7 +231,7 @@ public sealed class ResetFeedClient : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0) _owner.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) { _owner.Dispose(); _fallback?.Dispose(); }
         // Do not dispose the semaphore while a cancelled request may still unwind.
     }
 }

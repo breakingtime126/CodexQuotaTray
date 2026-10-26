@@ -25,6 +25,41 @@ static class PowerShellResetFeedRunnerTests
             Check.Equal(ResetFeedTransport.PowerShell7Json, result.Diagnostic!.Transport);
             Check.Null(result.Snapshot);
         });
+        asyncTest("reset runner: mirror fallback waits for prior cleanup lock before launching", async () =>
+        {
+            await using var fixture = new Fixture();
+            using var held = new FileStream(fixture.LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            fixture.Process.OnStart = () =>
+            {
+                var requestFile = Directory.GetFiles(Path.GetDirectoryName(fixture.LockPath)!, ".reset-request.*.json").Single();
+                using var document = JsonDocument.Parse(File.ReadAllBytes(requestFile));
+                var id = document.RootElement.GetProperty("requestId").GetString()!;
+                var raw = Encoding.UTF8.GetString(Success(id));
+                var json = raw.Substring(0, raw.Length - 1) + ",\"mirror\":{\"mirrorSchemaVersion\":1,\"upstreamSuccessAtUtc\":" +
+                    JsonSerializer.Serialize(Now.ToString("O")) + ",\"source\":\"https://codex-resets.com/api/v1/status\"}}";
+                File.WriteAllText(fixture.OutputPath, json);
+            };
+            using var client = new ResetFeedClient(
+                new ResetFeedClient(new FailedHandler()),
+                new ResetFeedClient(new PowerShellResetFeedHandler(fixture.Runner.FetchAsync, utcNow: () => Now),
+                    requireMirror: true, disableCache: true, utcNow: () => Now));
+            var pending = client.FetchAsync();
+            await Task.Delay(150);
+            Check.False(pending.IsCompleted);
+            Check.Equal(0, fixture.FactoryCalls);
+            held.Dispose();
+            Check.True((await pending.WaitAsync(Budget)).IsSuccess);
+            Check.Equal(1, fixture.FactoryCalls);
+            Check.False(fixture.Process.DisposedBeforeCleanup);
+        });
+        asyncTest("reset runner: cancellation while waiting for cleanup lock never launches", async () =>
+        {
+            await using var fixture = new Fixture();
+            using var held = new FileStream(fixture.LockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            using var cancel = new CancellationTokenSource(120);
+            await Check.ThrowsAsync<OperationCanceledException>(fixture.FetchAsync(cancel.Token));
+            Check.Equal(0, fixture.FactoryCalls);
+        });
         asyncTest("reset runner: missing PowerShell and unavailable output directory never launch", async () =>
         {
             using var files = new TempDirectory();
@@ -63,7 +98,7 @@ static class PowerShellResetFeedRunnerTests
             using var files = new TempDirectory();
             var directory = Path.Combine(files.Path, "folder with spaces");
             var pwsh = Path.Combine(directory, "pwsh.exe");
-            var script = Path.Combine(directory, "Fetch-ResetState-0.2.35.ps1");
+            var script = Path.Combine(directory, "Fetch-ResetState-0.2.36.ps1");
             var requestPath = Path.Combine(directory, ".reset-request." + Request.RequestId + ".json");
             var start = PowerShellResetFeedRunner.CreateStartInfo(pwsh, script, requestPath, Request.RequestId, directory);
             Check.Equal(pwsh, start.FileName);
@@ -88,7 +123,7 @@ static class PowerShellResetFeedRunnerTests
         asyncTest("reset runner: child can read retained request lease and return exact output bytes", async () =>
         {
             await using var fixture = new Fixture();
-            var oldScript = Path.Combine(Path.GetDirectoryName(fixture.ScriptPath)!, "Fetch-ResetState-0.2.32.ps1");
+            var oldScript = Path.Combine(Path.GetDirectoryName(fixture.ScriptPath)!, "Fetch-ResetState-0.2.35.ps1");
             File.WriteAllText(oldScript, "# Existing legacy script must remain untouched.\n");
             var output = Success(Request.RequestId);
             fixture.Process.OnStart = () =>
@@ -222,6 +257,12 @@ static class PowerShellResetFeedRunnerTests
         meta = new { api_version = "v1", generated_at = Now.ToString("O") }, errorCode = (string?)null
     });
 
+    private sealed class FailedHandler : System.Net.Http.HttpMessageHandler
+    {
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request,
+            CancellationToken cancellationToken) => Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly TempDirectory _files = new();
@@ -231,7 +272,7 @@ static class PowerShellResetFeedRunnerTests
         public PowerShellResetFeedRunner Runner { get; }
         public int FactoryCalls => Volatile.Read(ref _factoryCalls);
         public string RequestPath => Path.Combine(_files.Path, ".reset-request." + Request.RequestId + ".json");
-        public string ScriptPath => Path.Combine(_files.Path, "Fetch-ResetState-0.2.35.ps1");
+        public string ScriptPath => Path.Combine(_files.Path, "Fetch-ResetState-0.2.36.ps1");
         public string OutputPath => Path.Combine(_files.Path, "reset-state.json");
         public string LockPath => Path.Combine(_files.Path, ".reset-state.lock");
 

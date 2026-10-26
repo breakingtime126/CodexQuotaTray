@@ -15,6 +15,7 @@ if (args.Length == 1 && args[0] == "--read") return await FakeReadOnlyQuotaReade
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Action body) => tests.Add((name, () => { body(); return Task.CompletedTask; }));
 void AsyncTest(string name, Func<Task> body) => tests.Add((name, body));
+UpdateCheckScheduleTests.Register(Test);
 UpdateManifestTests.Register(Test);
 UpdateDownloadTests.Register(Test, AsyncTest);
 

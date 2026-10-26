@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')][string]$RequestId,
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$RequestPath,
+    [ValidateSet("Upstream", "Mirror")][string]$Source = "Mirror",
     [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
@@ -87,7 +88,8 @@ function Get-ProxyFailureCode($Proxy) {
     return $null
 }
 function New-StatusRequest($ETag) {
-    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, 'https://raw.githubusercontent.com/breakingtime126/CodexQuotaTray/reset-data/status.json')
+    $url = if ($Source -eq 'Upstream') { 'https://codex-resets.com/api/v1/status' } else { 'https://raw.githubusercontent.com/breakingtime126/CodexQuotaTray/reset-data/status.json' }
+    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $url)
     try {
         $cacheControl = [Net.Http.Headers.CacheControlHeaderValue]::new()
         $cacheControl.NoCache = $true
@@ -95,6 +97,7 @@ function New-StatusRequest($ETag) {
         $request.Headers.CacheControl = $cacheControl
         $request.Headers.Pragma.ParseAdd('no-cache')
         $request.Headers.Accept.ParseAdd('application/json')
+        $request.Headers.UserAgent.ParseAdd('CodexQuotaTray/0.2.36')
         if ($null -ne $ETag) {
             if (-not (Test-EntityTag $ETag)) { Throw-StateFailure 'SetupFailed' }
             $request.Headers.IfNoneMatch.ParseAdd($ETag)
@@ -189,7 +192,7 @@ function Convert-HttpResponse([Net.Http.HttpResponseMessage]$Response, [Threadin
             $contentType = $null
             if ($types.Count -ne 1 -or -not [Net.Http.Headers.MediaTypeHeaderValue]::TryParse($types[0], [ref]$contentType) -or
                 (-not [string]::Equals($contentType.MediaType, 'application/json', [StringComparison]::OrdinalIgnoreCase) -and
-                 -not [string]::Equals($contentType.MediaType, 'text/plain', [StringComparison]::OrdinalIgnoreCase))) { Throw-StateFailure 'ContentType' }
+                 ($Source -eq 'Upstream' -or -not [string]::Equals($contentType.MediaType, 'text/plain', [StringComparison]::OrdinalIgnoreCase)))) { Throw-StateFailure 'ContentType' }
         }
         $stage = 'ReadFailed'
         if ($null -ne $Response.Content.Headers.ContentLength -and $Response.Content.Headers.ContentLength -gt $limit) { Throw-StateFailure 'ResponseTooLarge' }
@@ -202,7 +205,7 @@ function Convert-HttpResponse([Net.Http.HttpResponseMessage]$Response, [Threadin
         }
         $Token.ThrowIfCancellationRequested()
         $stage = 'ParseFailed'
-        $state = Convert-MirrorState $buffered.ToArray()
+        $state = if ($Source -eq 'Upstream') { Convert-ApiState $buffered.ToArray() } else { Convert-MirrorState $buffered.ToArray() }
         $Token.ThrowIfCancellationRequested()
         $state.etag = $etag
         $state.retryAfterSeconds = $retryAfter
@@ -262,7 +265,7 @@ try {
     try { $proxyFailure = Get-ProxyFailureCode ([Net.Http.HttpClient].GetProperty('DefaultProxy').GetValue($null)) }
     catch { Throw-StateFailure 'ProxyInspectionFailed' }
     if ($null -ne $proxyFailure) { Throw-StateFailure $proxyFailure }
-    $cts = [Threading.CancellationTokenSource]::new(12000)
+    $cts = [Threading.CancellationTokenSource]::new(8000)
     $handler = [Net.Http.HttpClientHandler]::new()
     $handler.AllowAutoRedirect = $false
     $handler.UseCookies = $false

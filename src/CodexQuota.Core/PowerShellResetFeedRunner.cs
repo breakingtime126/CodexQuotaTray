@@ -51,6 +51,7 @@ public sealed class PowerShellResetFeedRunner : IDisposable
         FileStream? lockLease = null, scriptLease = null, requestLease = null;
         var phase = ResetFeedFileFailure.OutputWriteFailed;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
+        deadline.CancelAfter(ResetFeedClient.DefaultTimeout);
         try
         {
             deadline.Token.ThrowIfCancellationRequested();
@@ -64,8 +65,8 @@ public sealed class PowerShellResetFeedRunner : IDisposable
             // Shared with the small validator; two owners cannot publish the same output concurrently.
             var lockPath = Path.Combine(_directory, ".reset-state.lock");
             RejectReparsePoint(lockPath);
-            lockLease = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            var scriptPath = Path.Combine(_directory, "Fetch-ResetState-0.2.35.ps1");
+            lockLease = await AcquireOutputLockAsync(lockPath, deadline.Token).ConfigureAwait(false);
+            var scriptPath = Path.Combine(_directory, "Fetch-ResetState-0.2.36.ps1");
             scriptLease = PrepareScript(scriptPath, _script());
             requestPath = Path.Combine(_directory, ".reset-request." + request.RequestId + ".json");
             var requestBytes = JsonSerializer.SerializeToUtf8Bytes(new { schemaVersion = 1, requestId = request.RequestId, etag = request.ETag });
@@ -82,7 +83,10 @@ public sealed class PowerShellResetFeedRunner : IDisposable
 
             deadline.Token.ThrowIfCancellationRequested();
             phase = ResetFeedFileFailure.LaunchFailed;
+            if (request.Source is not (ResetFeedSource.Mirror or ResetFeedSource.Upstream))
+                throw new ResetFeedFileException(ResetFeedFileFailure.OutputInvalid);
             var start = CreateStartInfo(pwsh, scriptPath, requestPath, request.RequestId, _directory);
+            start.Arguments += request.Source == ResetFeedSource.Upstream ? " -Source Upstream" : " -Source Mirror";
             process = _processFactory(start);
             if (!process.Start()) throw new ResetFeedFileException(ResetFeedFileFailure.LaunchFailed);
             // Drain bounded chunks, discard all text. Neither stdout nor stderr is diagnostic input.
@@ -144,6 +148,26 @@ public sealed class PowerShellResetFeedRunner : IDisposable
             }
         }
     }
+
+    private static async Task<FileStream> AcquireOutputLockAsync(string path, CancellationToken token)
+    {
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            RejectReparsePoint(path);
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException error) when (IsSharingConflict(error))
+            {
+                // A prior timed-out owned process may still be finishing cleanup. Wait for its lease,
+                // never run a second process concurrently or retry permission/path failures.
+                await Task.Delay(50, token).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool IsSharingConflict(IOException error) =>
+        error.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021) ||
+        Environment.OSVersion.Platform != PlatformID.Win32NT && error.HResult == 11;
 
     internal static ProcessStartInfo CreateStartInfo(string pwsh, string script, string requestPath, string requestId, string directory) =>
         new(pwsh)

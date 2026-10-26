@@ -83,6 +83,23 @@ try {
         Assert-True ($request.Headers.Pragma.ToString() -ceq 'no-cache' -and $request.Headers.Accept.ToString() -ceq 'application/json') 'Pragma and Accept headers'
         Assert-True ($null -eq $request.Headers.Authorization -and -not $request.Headers.Contains('Cookie') -and -not $request.Headers.Contains('Proxy-Authorization')) 'No authentication or cookies'
     } finally { $request.Dispose() }
+    $savedSource = $source
+    $Source = 'Upstream'
+    $request = New-StatusRequest $null
+    try {
+        Assert-True ($request.RequestUri.AbsoluteUri -ceq 'https://codex-resets.com/api/v1/status') 'Direct source is fixed upstream'
+        Assert-True ($request.Headers.UserAgent.ToString() -ceq 'CodexQuotaTray/0.2.36') 'Honest fixed application User-Agent'
+        Assert-True ($request.Headers.IfNoneMatch.Count -eq 0 -and $null -eq $request.Headers.Authorization) 'Direct source is unconditional anonymous GET'
+    } finally { $request.Dispose(); $Source = $savedSource }
+    $savedSource = $source
+    $Source = 'Upstream'
+    $response = New-TestResponse 200 ([Text.Encoding]::UTF8.GetBytes('{"data":{},"meta":{}}'))
+    try {
+        $state = Convert-HttpResponse $response ([Threading.CancellationToken]::None)
+        Assert-True ($state.status -ceq 'Success' -and -not $state.Contains('mirror')) 'Direct body retains distinct provenance for strict Core parsing'
+        $response.Content.Headers.ContentType = [Net.Http.Headers.MediaTypeHeaderValue]::new('text/plain')
+        Assert-True ((Convert-HttpResponse $response ([Threading.CancellationToken]::None)).errorCode -ceq 'ContentType') 'Direct source rejects text/plain while mirror accepts GitHub raw'
+    } finally { $response.Dispose(); $Source = $savedSource }
     $request = New-StatusRequest $null
     try { Assert-True ($request.Headers.IfNoneMatch.Count -eq 0) 'No cache input omits conditional header' } finally { $request.Dispose() }
     Assert-Rejected { New-StatusRequest '"x", "y"' } 'No raw ETag header injection'

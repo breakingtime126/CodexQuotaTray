@@ -12,19 +12,22 @@ public sealed class PowerShellResetFeedHandler : HttpMessageHandler
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly IDisposable? _owner;
     private int _inFlight;
+    private readonly ResetFeedSource _source;
 
     public PowerShellResetFeedHandler(Func<ResetFeedFileRequest, CancellationToken, Task<byte[]>> fetch,
-        Func<DateTimeOffset>? utcNow = null, IDisposable? owner = null)
+        Func<DateTimeOffset>? utcNow = null, IDisposable? owner = null, ResetFeedSource source = ResetFeedSource.Mirror)
     {
         _fetch = fetch ?? throw new ArgumentNullException(nameof(fetch));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _owner = owner;
+        if (source is not (ResetFeedSource.Mirror or ResetFeedSource.Upstream)) throw new ArgumentOutOfRangeException(nameof(source));
+        _source = source;
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (request.Method != HttpMethod.Get || request.RequestUri != ResetFeedClient.Endpoint || request.Content is not null ||
+        if (request.Method != HttpMethod.Get || request.RequestUri != (_source == ResetFeedSource.Upstream ? ResetFeedClient.UpstreamEndpoint : ResetFeedClient.Endpoint) || request.Content is not null ||
             request.Headers.Authorization is not null || request.Headers.Contains("Proxy-Authorization") ||
             request.Headers.IfNoneMatch.Count > 1)
             throw new ResetFeedFileException(ResetFeedFileFailure.OutputInvalid);
@@ -39,7 +42,7 @@ public sealed class PowerShellResetFeedHandler : HttpMessageHandler
         try
         {
             if (etag?.Length > 256) throw new ResetFeedFileException(ResetFeedFileFailure.OutputInvalid);
-            var invocation = new ResetFeedFileRequest(Guid.NewGuid().ToString("D"), _utcNow(), etag);
+            var invocation = new ResetFeedFileRequest(Guid.NewGuid().ToString("D"), _utcNow(), etag) { Source = _source };
             var result = await _fetch(invocation, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             return ResetFeedFileProtocol.Parse(result, invocation, _utcNow());

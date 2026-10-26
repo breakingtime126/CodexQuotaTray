@@ -18,6 +18,7 @@ public sealed record ResetFeedSnapshot(ResetFeedReset? LatestReset, ResetFeedSch
     ResetFeedWatch? ActiveWatch, DateTimeOffset GeneratedAt)
 {
     public DateTimeOffset? UpstreamSuccessAtUtc { get; init; }
+    public DateTimeOffset? DirectGeneratedAtUtc { get; init; }
 }
 
 public enum ResetFeedReadStatus
@@ -56,10 +57,11 @@ public sealed record ResetFeedPresentation(bool IsVisible, ResetFeedRow? Latest,
     {
         if (result is null || !result.IsSuccess || result.Snapshot is not { } snapshot ||
             snapshot.GeneratedAt > AddClamped(now, AllowedClockSkew) ||
-            snapshot.UpstreamSuccessAtUtc is { } success && !ResetFeedMirror.IsFresh(success, now)) return Hidden;
+            snapshot.UpstreamSuccessAtUtc is { } success && !ResetFeedMirror.IsFresh(success, now) ||
+            snapshot.DirectGeneratedAtUtc is { } direct && !ResetFeedMirror.IsFresh(direct, now)) return Hidden;
 
         ResetFeedRow? latest = null;
-        DateTimeOffset? nextChange = snapshot.UpstreamSuccessAtUtc?.Add(ResetFeedMirror.MaximumAge);
+        DateTimeOffset? nextChange = (snapshot.UpstreamSuccessAtUtc ?? snapshot.DirectGeneratedAtUtc)?.Add(ResetFeedMirror.MaximumAge);
         if (snapshot.LatestReset is { } reset && reset.AnnouncedAt <= now)
         {
             latest = new("上次重置", RelativeSince(reset.AnnouncedAt, now), reset.SourceUrl?.AbsoluteUri,

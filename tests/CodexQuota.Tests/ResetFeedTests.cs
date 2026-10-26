@@ -16,6 +16,83 @@ static class ResetFeedTests
 
     public static void Register(Action<string, Action> test, Action<string, Func<Task>> asyncTest)
     {
+        asyncTest("reset fallback: complete chains serialize and queued cancellation does not query", async () =>
+        {
+            var primaryCalls = 0;
+            var mirrorEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var client = new ResetFeedClient(
+                new ResetFeedClient(new Handler((_, _) => { primaryCalls++; return Task.FromResult(Response("{}")); }), requireUpstreamFreshness: true, disableCache: true, utcNow: () => Now),
+                new ResetFeedClient(new Handler(async (_, _) => { mirrorEntered.TrySetResult(true); await release.Task; return Response(Mirror(Now)); }), requireMirror: true, disableCache: true, utcNow: () => Now));
+            var first = client.FetchAsync();
+            await mirrorEntered.Task;
+            using var cancel = new CancellationTokenSource();
+            var second = client.FetchAsync(cancel.Token);
+            cancel.Cancel();
+            Check.Equal(ResetFeedReadStatus.Cancelled, (await second).Status);
+            Check.Equal(1, primaryCalls);
+            release.TrySetResult(true);
+            Check.True((await first).IsSuccess);
+        });
+        asyncTest("reset fallback: valid direct data wins without querying mirror and expires independently", async () =>
+        {
+            var fallbackCalls = 0;
+            using var client = new ResetFeedClient(
+                new ResetFeedClient(new Handler((request, _) => {
+                    Check.Equal(ResetFeedClient.UpstreamEndpoint, request.RequestUri!);
+                    Check.Equal(0, request.Headers.IfNoneMatch.Count);
+                    return Task.FromResult(Response(Envelope(Latest)));
+                }), requireUpstreamFreshness: true, disableCache: true, endpoint: ResetFeedClient.UpstreamEndpoint, utcNow: () => Now),
+                new ResetFeedClient(new Handler((_, _) => { fallbackCalls++; return Task.FromResult(Response(Mirror(Now))); }), requireMirror: true, disableCache: true, utcNow: () => Now));
+            var result = await client.FetchAsync();
+            Check.True(result.IsSuccess);
+            Check.Equal(0, fallbackCalls);
+            Check.Null(result.Snapshot!.UpstreamSuccessAtUtc);
+            Check.Equal(Now, result.Snapshot.DirectGeneratedAtUtc!.Value);
+            Check.False(ResetFeedPresentation.Create(result, Now.AddHours(1)).IsVisible);
+        });
+        foreach (var mode in new[] { "network", "timeout", "schema", "stale", "rate", "304" })
+            asyncTest("reset fallback: upstream " + mode + " uses only fresh mirror", async () =>
+            {
+                var upstreamCalls = 0; var fallbackCalls = 0;
+                using var client = new ResetFeedClient(
+                    new ResetFeedClient(new Handler(async (request, token) => {
+                        upstreamCalls++; Check.Equal(0, request.Headers.IfNoneMatch.Count);
+                        if (mode == "network") throw new HttpRequestException();
+                        if (mode == "timeout") await Task.Delay(2000, token);
+                        if (mode == "schema") return Response("{}");
+                        if (mode == "rate") return new HttpResponseMessage((HttpStatusCode)429);
+                        if (mode == "304") return new HttpResponseMessage(HttpStatusCode.NotModified);
+                        return Response(Envelope(Latest).Replace("2026-10-20T07:00:00Z", "2026-10-20T05:00:00Z"));
+                    }), timeout: TimeSpan.FromMilliseconds(80), requireUpstreamFreshness: true, disableCache: true, utcNow: () => Now),
+                    new ResetFeedClient(new Handler((request, _) => {
+                        fallbackCalls++; Check.Equal(0, request.Headers.IfNoneMatch.Count);
+                        return Task.FromResult(Response(Mirror(Now)));
+                    }), requireMirror: true, disableCache: true, utcNow: () => Now));
+                var result = await client.FetchAsync();
+                Check.True(result.IsSuccess); Check.Equal(1, upstreamCalls); Check.Equal(1, fallbackCalls);
+                Check.Equal(Now, result.Snapshot!.UpstreamSuccessAtUtc!.Value);
+                Check.Null(result.Snapshot.DirectGeneratedAtUtc);
+            });
+        foreach (var mirrorBody in new[] { "{}", Mirror(Now.AddHours(-1)) })
+            asyncTest("reset fallback: both invalid or stale sources stay hidden " + mirrorBody.Length, async () =>
+            {
+                using var client = new ResetFeedClient(
+                    new ResetFeedClient(new Handler((_, _) => Task.FromResult(Response("{}"))), requireUpstreamFreshness: true, disableCache: true, utcNow: () => Now),
+                    new ResetFeedClient(new Handler((_, _) => Task.FromResult(Response(mirrorBody))), requireMirror: true, disableCache: true, utcNow: () => Now));
+                var result = await client.FetchAsync(); Check.False(result.IsSuccess); Check.Null(result.Snapshot);
+                Check.False(ResetFeedPresentation.Create(result, Now).IsVisible);
+            });
+        asyncTest("reset fallback: caller cancellation never starts mirror", async () =>
+        {
+            var calls = 0;
+            using var stop = new CancellationTokenSource(); stop.Cancel();
+            using var client = new ResetFeedClient(
+                new ResetFeedClient(new Handler((_, _) => Task.FromResult(Response("{}")))),
+                new ResetFeedClient(new Handler((_, _) => { calls++; return Task.FromResult(Response(Mirror(Now))); })));
+            Check.Equal(ResetFeedReadStatus.Cancelled, (await client.FetchAsync(stop.Token)).Status);
+            Check.Equal(0, calls);
+        });
         test("reset mirror: independent freshness bounds retain historical latest events", () =>
         {
             foreach (var age in new[] { TimeSpan.Zero, TimeSpan.FromMinutes(59), TimeSpan.FromMinutes(-5) })
