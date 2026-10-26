@@ -1,8 +1,10 @@
-# Isolated QA artifacts — NOT A RELEASE
+# Windows update smoke test artifacts
 
-These files exist only on the qa/update-smoke branch for explicitly authorized Windows validation. They are not published release assets, and there is no production update.json. Do not distribute the candidate as a verified stable update.
+Testing only, not a production release. Version 0.2.34 remains a development candidate; Windows lifecycle validation is pending. No update.json is published here.
 
-- CodexQuotaTray-UpdateSmoke.zip: 1,958,570 bytes; SHA-256 `2e2a61afcb85b37feefa6075154e6479c8ff5884d797c252670c44ccfa0c851f`. Contains a test driver, two isolated fixture executables, unchanged Fetch-Update.ps1, and instructions. Fixture signing keys are generated in memory during testing; no production private key is included.
-- candidate/CodexQuotaTray.exe: 2,616,320 bytes; SHA-256 `64985f049f6d1124651e6229faaa9186bda82c908c855d037e2dd8af70ea6534`. Cloud-built 0.2.34 candidate; Windows lifecycle and network acceptance are pending.
+Source: c61f2f572005b67ed8cf06001d5bbd748df2ad5c. Fixes replacement self-lock and adds phase diagnostics.
 
-Run smoke only as an ordinary user in an isolated temporary directory, following the included README. Do not replace an installed tray with these test fixtures. Production release and signing will occur only after the required validation.
+- CodexQuotaTray-UpdateSmoke.zip: 1,958,813 bytes; SHA256 `223d42201b16b8561605701d5d8e288eb8cc5b8eba917f79b14e1ebc5e40c844`.
+- candidate/CodexQuotaTray.exe: 2,616,832 bytes; SHA256 `ea194f5b7efa18babf4966c5096acf9970878e7d8460c1fe9138f4e675642e1e`.
+
+The smoke package contains test-only fixtures and generates its own ephemeral signing key. It does not contain a production private signing key. Run only the isolated test harness as documented inside the archive; the candidate is not yet approved for production distribution.

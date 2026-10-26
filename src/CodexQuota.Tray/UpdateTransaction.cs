@@ -23,7 +23,7 @@ internal static class UpdateTransaction
         if (args.Length == 0 || args[0] != "--apply-update") return false;
         if (args.Length != 2) return true;
         try { Apply(Path.GetFullPath(args[1])); }
-        catch (Exception error) { TryStatus(args[1], "更新未完成：" + error.GetType().Name); }
+        catch (Exception error) { TryStatus(args[1], "更新未完成；stage=Preflight error=" + error.GetType().Name + " hresult=0x" + error.HResult.ToString("X8")); }
         return true;
     }
 
@@ -114,21 +114,27 @@ internal static class UpdateTransaction
         Process? next = null;
         var healthy = false;
         var attemptedLaunch = false;
+        var phase = "Revalidate";
         try
         {
             if (Hash(target) != request.OldSha256) throw new InvalidDataException("Target changed during shutdown.");
-            using var candidateLease = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            // ReplaceFileW requires an exclusive replacement-file open. Do not retain
+            // any candidate handle across File.Replace, even one sharing Delete.
             manifest.VerifyFile(candidate);
+            phase = "Replace";
             File.Replace(candidate, target, backup);
+            phase = "VerifyInstalled";
+            // Pin the installed path before verification and retain through startup/health.
+            // Invalid or concurrently altered bytes are never executed.
+            using var launchLease = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+            manifest.VerifyFile(target);
             var args = "--update-health " + Quote(directory) + " " + request.Nonce;
             if (request.CliPath is not null) args += " --codex-path " + Quote(request.CliPath);
-            using (var launchLease = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                manifest.VerifyFile(target);
-                attemptedLaunch = true;
-                next = Process.Start(new ProcessStartInfo(target, args) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(target)! });
-            }
+            phase = "Launch";
+            attemptedLaunch = true;
+            next = Process.Start(new ProcessStartInfo(target, args) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(target)! });
             if (next is null) throw new IOException("New application did not start.");
+            phase = "Health";
             var health = Path.Combine(directory, "healthy");
             for (var i = 0; i < 300; i++)
             {
@@ -139,8 +145,9 @@ internal static class UpdateTransaction
             if (!healthy) throw new IOException("New application did not confirm startup.");
             TryStatus(requestPath, "更新成功 " + manifest.Version);
         }
-        catch
+        catch (Exception error)
         {
+            var diagnostic = " stage=" + phase + " error=" + error.GetType().Name + " hresult=0x" + error.HResult.ToString("X8");
             if (next is not null && !next.HasExited) { next.Kill(); if (!next.WaitForExit(10000)) throw new IOException("New process exit unconfirmed; backup retained."); }
             // Recover even when replacement itself failed after the old application stopped.
             var targetHash = File.Exists(target) ? Hash(target) : null;
@@ -157,7 +164,7 @@ internal static class UpdateTransaction
             if (attemptedLaunch) UpdateFailureStore.Record(manifest.Version.ToString());
             var args = request.CliPath is null ? "" : "--codex-path " + Quote(request.CliPath);
             Process.Start(new ProcessStartInfo(target, args) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(target)! });
-            TryStatus(requestPath, "更新未完成，已恢复旧版。");
+            TryStatus(requestPath, "更新未完成，已恢复旧版。" + diagnostic);
         }
         finally { next?.Dispose(); }
     }
