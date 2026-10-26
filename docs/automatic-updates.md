@@ -22,4 +22,6 @@ The rollback handshake confirms process/tray startup, not correctness of every f
 
 ## Windows verification
 
-`tools/UpdateSmoke` builds isolated net48 fixture processes linked to the actual replacement helper. It covers successful replacement, corrupt package rejection before shutdown, locked replacement recovery and failed-start rollback. Test signing keys are generated in memory; only the public fixture key is written. Tests do not use the production signing key, modify the installed tray, change startup settings or publish releases. Real PowerShell download and the full WinForms application still require supported Windows validation.
+`tools/UpdateSmoke` builds isolated net48 fixture processes linked to the actual replacement helper. It covers successful replacement, corrupt package rejection before shutdown, locked replacement recovery, failed-start rollback, transient health-marker locking and a 65-second delayed parent shutdown. Test signing keys are generated in memory; only the public fixture key is written. Tests do not use the production signing key, modify the installed tray, change startup settings or publish releases. Real PowerShell download and the full WinForms application still require supported Windows validation.
+
+On 2026-10-26, the corrected six-case lifecycle suite passed 6/6 on real Windows as a normal user, with the installed application untouched. This verifies the shared replacement helper using isolated fixtures, not a live end-to-end WinForms update or production network download. See [0.2.34 verification](VERIFY-0.2.34.md).
