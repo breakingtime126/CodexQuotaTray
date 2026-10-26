@@ -159,7 +159,13 @@ internal sealed class TrayContext : ApplicationContext
         _tray = new NativeTrayIcon { ContextMenuStrip = _menu, Visible = false };
         _tray.DoubleClick += (_, _) => BeginRefresh();
         _tray.Selected += (_, _) => AcknowledgeForecast();
-        _tray.LinkActivated += OpenResetLink;
+        _tray.LinkActivated += OnHoverLinkActivated;
+        _updates.StateChanged += () =>
+        {
+            if (_exiting) return;
+            _hoverState = null;
+            Render();
+        };
         _tray.HoverEntered += (_, _) => BeginRefresh(RefreshTrigger.Hover);
         _tray.Diagnostic += _log.Record;
         _tray.RegistrationUnavailable += async (_, _) =>
@@ -249,6 +255,17 @@ internal sealed class TrayContext : ApplicationContext
         var row = forecast ? current.Forecast : current.Latest;
         if (row?.SourceUrl is not { } url) return;
         OpenResetLink(new(row.EventIdentity, url, row.Description, 0, 0, 0, 0, forecast));
+    }
+
+    private async void OnHoverLinkActivated(HoverLinkRegion link)
+    {
+        if (_exiting) return;
+        if (link.Url.Length == 0 && link.Key.StartsWith("update-", StringComparison.Ordinal))
+        {
+            await _updates.InstallAsync(link.Key.Substring("update-".Length));
+            return;
+        }
+        OpenResetLink(link);
     }
 
     private void OpenResetLink(HoverLinkRegion link)
@@ -624,7 +641,7 @@ internal sealed class TrayContext : ApplicationContext
             if (!_animationTimer.Enabled) _animationTimer.Start();
         }
         else _animationTimer.Stop();
-        var notification = _resetUnread;
+        var notification = _resetUnread || _updates.HasAvailableUpdate;
         var key = (percent, stale, size, frame.Key, notification);
         if (_rendered != key)
         {
@@ -644,6 +661,12 @@ internal sealed class TrayContext : ApplicationContext
             _nextHoverChange = HoverCardModel.NextChange(_state, now);
             var hover = HoverCardModel.Create(_state, now, _speedView,
                 _cleanup.RefreshPaused ? _cleanup.Status : null);
+            if (_updates.Notice is { } updateNotice)
+                hover = hover with
+                {
+                    UpdateNotice = updateNotice,
+                    AccessibleText = hover.AccessibleText + "\n" + updateNotice.Text + "，" + updateNotice.ActionText
+                };
             if (resetPresentation.IsVisible)
                 hover = hover with
                 {

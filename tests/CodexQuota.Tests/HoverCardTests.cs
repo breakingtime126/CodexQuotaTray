@@ -14,6 +14,17 @@ internal static class HoverCardTests
                 plan == "plus" ? five : week, new[] { five, week }, QuotaSelectionReason.Preferred);
             return new(selection.Active, now, ReadStatus.Ready, selection, cards ?? ResetCards.NotReturned, now);
         }
+        test("card: update notice adds one row without changing quota/reset data", () =>
+        {
+            var original = HoverCardModel.Create(State(), now);
+            var available = original with { UpdateNotice = new("0.2.36.0", "发现新版本 0.2.36.0", "更新", true) };
+            Check.Equal(HoverCardLayout.ContentHeight(original) + HoverCardLayout.UpdateNoticeHeight,
+                HoverCardLayout.ContentHeight(available));
+            Check.Equal(original.Quotas, available.Quotas);
+            Check.Equal(original.ResetFeed, available.ResetFeed);
+            var busy = available with { UpdateNotice = available.UpdateNotice! with { CanInstall = false, ActionText = "下载中…" } };
+            Check.Equal(HoverCardLayout.ContentHeight(available), HoverCardLayout.ContentHeight(busy));
+        });
         foreach (var plan in new[] { "prolite", "pro", "promax" })
             test($"card: {plan} contains both returned quotas and retains weekly header", () =>
             {

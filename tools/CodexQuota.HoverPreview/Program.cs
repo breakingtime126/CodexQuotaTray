@@ -67,6 +67,9 @@ foreach (var key in new[] { "reset-plus", "reset-latest-only", "reset-forecast-o
     "reset-offline", "reset-expired", "reset-baseline", "reset-long" })
     fixtures[key] = resetPlus;
 fixtures["reset-weekly"] = resetWeekly;
+fixtures["update-available"] = State(87);
+fixtures["update-downloading"] = State(87);
+fixtures["update-retry"] = State(87);
 foreach (var key in new[] { "reset-scheduled-hour", "reset-scheduled-75min", "reset-scheduled-nextday", "reset-scheduled-overdue" })
 {
     fixtures[key] = resetWeekly;
@@ -128,6 +131,10 @@ foreach (var highContrast in new[] { false, true })
     var model = HoverCardModel.Create(fixture.Value, now, Speed(fixture.Key));
     if (fixture.Key.StartsWith("reset-", StringComparison.Ordinal) && fixture.Key != "reset-baseline")
         model = model with { ResetFeed = Feed(fixture.Key) };
+    if (fixture.Key.StartsWith("update-", StringComparison.Ordinal))
+        model = model with { UpdateNotice = new("0.2.36.0", "发现新版本 0.2.36.0",
+            fixture.Key == "update-downloading" ? "更新中…" : fixture.Key == "update-retry" ? "重试" : "更新",
+            fixture.Key != "update-downloading") };
     var height = Math.Min(760, HoverCardLayout.ContentHeight(model) + 2 * HoverCardLayout.Shadow);
     var size = new Size((int)Math.Ceiling((HoverCardLayout.Width + 2 * HoverCardLayout.Shadow) * scale), (int)Math.Ceiling(height * scale));
     var suffix = highContrast ? darkMode ? "-dark-contrast" : "-contrast" : darkMode ? "-dark" : "";

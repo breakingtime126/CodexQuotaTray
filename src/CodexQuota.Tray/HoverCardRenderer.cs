@@ -120,6 +120,20 @@ internal static class HoverCardRenderer
             x + 78, Shadow + 10, textWidth - 78, 24, 11, subdued, alignRight: true);
 
         var y = Shadow + HeaderHeight;
+        if (model.UpdateNotice is { } update)
+        {
+            var actionWidth = Math.Min(textWidth / 2, MeasureText(update.ActionText, 12, bold: true) + 8);
+            var actionX = right - actionWidth;
+            using (var dot = new SolidBrush(ColorFor(HoverTone.Red, true)))
+                g.FillEllipse(dot, x, y + 9, 5, 5);
+            Text(update.Text, x + 11, y, Math.Max(0, textWidth - actionWidth - 17), 23, 11, fg);
+            Text(update.ActionText, actionX, y, actionWidth, 23, 12,
+                update.CanInstall ? ColorFor(HoverTone.Mint) : subdued, bold: true, alignRight: true);
+            if (update.CanInstall)
+                links?.Add(new("update-" + update.Version, "", "下载、验证并安装更新，完成后重新启动。",
+                    actionX, y, actionWidth, 24));
+            y += UpdateNoticeHeight;
+        }
         var compact = model.Quotas.Count > 1;
         for (var index = 0; index < model.Quotas.Count; index++)
         {
