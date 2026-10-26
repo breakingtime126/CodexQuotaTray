@@ -77,8 +77,11 @@ internal static class CliCompatibilityTests
                 Check.Equal(1, diagnostics.Count);
                 Check.Equal(1, diagnostics[0].CandidateIndex);
                 Check.Equal(1, diagnostics[0].AttemptIndex);
+                // Windows owns children through native CreateProcess; portable protocol tests use Process.Start.
+                var expectedStartOperation = OperatingSystem.IsWindows()
+                    ? CliStartOperation.CreateProcess : CliStartOperation.ManagedProcessStart;
                 Check.True(diagnostics.All(item => item.Stage == CliStage.Start &&
-                    item.StartOperation == CliStartOperation.ManagedProcessStart && item.Code is not null));
+                    item.StartOperation == expectedStartOperation && item.Code is not null));
                 Check.False(diagnostics.Any(item => item.ToSafeLogCode().Contains("private", StringComparison.Ordinal)));
             });
 

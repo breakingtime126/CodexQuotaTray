@@ -183,7 +183,10 @@ internal static class SelectedBackendTests
             Check.Equal(ReadStatus.Unavailable, result.Status);
             var failed = traces.Single(item => item.Stage == SourceBackendStage.Start);
             Check.Equal(SourceBackendOutcome.Failed, failed.Outcome);
-            Check.Equal(CliStartOperation.ManagedProcessStart, failed.StartOperation);
+            // Assert the exact launch API used on this OS, including native Windows failure reporting.
+            var expectedStartOperation = OperatingSystem.IsWindows()
+                ? CliStartOperation.CreateProcess : CliStartOperation.ManagedProcessStart;
+            Check.Equal(expectedStartOperation, failed.StartOperation);
             Check.True(failed.Code is not null);
             Check.Null(failed.Version);
             Check.Equal(SourceBackendVersionEvidence.Unknown, failed.VersionEvidence);
