@@ -1,0 +1,27 @@
+name: Mirror public reset status
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: public-reset-data-mirror
+  cancel-in-progress: false
+jobs:
+  mirror:
+    if: github.repository == 'breakingtime126/CodexQuotaTray' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Test bounded public mirror producer
+        run: python3 -m unittest discover -s scripts -p 'test_reset_mirror.py' -v
+      - name: Fetch, validate, and publish public status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/reset-mirror.py --publish
