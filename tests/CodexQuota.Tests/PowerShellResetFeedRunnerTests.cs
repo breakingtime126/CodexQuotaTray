@@ -63,7 +63,7 @@ static class PowerShellResetFeedRunnerTests
             using var files = new TempDirectory();
             var directory = Path.Combine(files.Path, "folder with spaces");
             var pwsh = Path.Combine(directory, "pwsh.exe");
-            var script = Path.Combine(directory, "Fetch-ResetState-0.2.32.ps1");
+            var script = Path.Combine(directory, "Fetch-ResetState-0.2.35.ps1");
             var requestPath = Path.Combine(directory, ".reset-request." + Request.RequestId + ".json");
             var start = PowerShellResetFeedRunner.CreateStartInfo(pwsh, script, requestPath, Request.RequestId, directory);
             Check.Equal(pwsh, start.FileName);
@@ -88,6 +88,8 @@ static class PowerShellResetFeedRunnerTests
         asyncTest("reset runner: child can read retained request lease and return exact output bytes", async () =>
         {
             await using var fixture = new Fixture();
+            var oldScript = Path.Combine(Path.GetDirectoryName(fixture.ScriptPath)!, "Fetch-ResetState-0.2.32.ps1");
+            File.WriteAllText(oldScript, "# Existing legacy script must remain untouched.\n");
             var output = Success(Request.RequestId);
             fixture.Process.OnStart = () =>
             {
@@ -102,6 +104,7 @@ static class PowerShellResetFeedRunnerTests
             };
             var result = await fixture.FetchAsync().WaitAsync(Budget);
             Check.True(output.SequenceEqual(result));
+            Check.Equal("# Existing legacy script must remain untouched.\n", File.ReadAllText(oldScript));
             Check.Equal(1, fixture.FactoryCalls);
             Check.Equal(1, fixture.Process.StartCount);
             Check.True(fixture.Process.Input.Closed);
@@ -228,7 +231,7 @@ static class PowerShellResetFeedRunnerTests
         public PowerShellResetFeedRunner Runner { get; }
         public int FactoryCalls => Volatile.Read(ref _factoryCalls);
         public string RequestPath => Path.Combine(_files.Path, ".reset-request." + Request.RequestId + ".json");
-        public string ScriptPath => Path.Combine(_files.Path, "Fetch-ResetState-0.2.32.ps1");
+        public string ScriptPath => Path.Combine(_files.Path, "Fetch-ResetState-0.2.35.ps1");
         public string OutputPath => Path.Combine(_files.Path, "reset-state.json");
         public string LockPath => Path.Combine(_files.Path, ".reset-state.lock");
 

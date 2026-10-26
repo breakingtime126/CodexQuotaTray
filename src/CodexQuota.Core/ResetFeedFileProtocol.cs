@@ -70,7 +70,7 @@ public static class ResetFeedFileProtocol
             if (root.ValueKind != JsonValueKind.Object) throw Failure(ResetFeedFileFailure.OutputInvalid);
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var field in root.EnumerateObject())
-                if (!names.Add(field.Name) || !Fields.Contains(field.Name) && field.Name is not ("exceptionType" or "nativeCode"))
+                if (!names.Add(field.Name) || !Fields.Contains(field.Name) && field.Name is not ("exceptionType" or "nativeCode" or "mirror"))
                     throw Failure(ResetFeedFileFailure.OutputInvalid);
             if (Fields.Any(name => !names.Contains(name)) || names.Contains("exceptionType") != names.Contains("nativeCode") ||
                 !root.GetProperty("schemaVersion").TryGetInt32(out var schema) || schema != 1)
@@ -144,6 +144,14 @@ public static class ResetFeedFileProtocol
                 if (data.ValueKind != JsonValueKind.Object || meta.ValueKind != JsonValueKind.Object)
                     throw Failure(ResetFeedFileFailure.OutputInvalid);
                 var json = "{\"data\":" + data.GetRawText() + ",\"meta\":" + meta.GetRawText() + "}";
+                if (root.TryGetProperty("mirror", out var mirror))
+                {
+                    if (mirror.ValueKind != JsonValueKind.Object) throw Failure(ResetFeedFileFailure.OutputInvalid);
+                    // Copy metadata verbatim so the production client applies strict schema and freshness validation.
+                    var metadata = mirror.GetRawText();
+                    json = metadata.Substring(0, metadata.Length - 1) + ",\"data\":" + data.GetRawText() +
+                        ",\"meta\":" + meta.GetRawText() + "}";
+                }
                 if (Encoding.UTF8.GetByteCount(json) > ResetFeedParser.MaximumBodyBytes)
                     throw Failure(ResetFeedFileFailure.OutputTooLarge);
                 body = Encoding.UTF8.GetBytes(json);

@@ -15,7 +15,10 @@ public sealed record ResetFeedWatch(string Level, int? ResetChancePercent, strin
     DateTimeOffset ObservedAt, DateTimeOffset ExpiresAt, string Text, Uri? SourceUrl);
 
 public sealed record ResetFeedSnapshot(ResetFeedReset? LatestReset, ResetFeedScheduledReset? ScheduledReset,
-    ResetFeedWatch? ActiveWatch, DateTimeOffset GeneratedAt);
+    ResetFeedWatch? ActiveWatch, DateTimeOffset GeneratedAt)
+{
+    public DateTimeOffset? UpstreamSuccessAtUtc { get; init; }
+}
 
 public enum ResetFeedReadStatus
 {
@@ -52,10 +55,11 @@ public sealed record ResetFeedPresentation(bool IsVisible, ResetFeedRow? Latest,
     public static ResetFeedPresentation Create(ResetFeedReadResult? result, DateTimeOffset now)
     {
         if (result is null || !result.IsSuccess || result.Snapshot is not { } snapshot ||
-            snapshot.GeneratedAt > AddClamped(now, AllowedClockSkew)) return Hidden;
+            snapshot.GeneratedAt > AddClamped(now, AllowedClockSkew) ||
+            snapshot.UpstreamSuccessAtUtc is { } success && !ResetFeedMirror.IsFresh(success, now)) return Hidden;
 
         ResetFeedRow? latest = null;
-        DateTimeOffset? nextChange = null;
+        DateTimeOffset? nextChange = snapshot.UpstreamSuccessAtUtc?.Add(ResetFeedMirror.MaximumAge);
         if (snapshot.LatestReset is { } reset && reset.AnnouncedAt <= now)
         {
             latest = new("上次重置", RelativeSince(reset.AnnouncedAt, now), reset.SourceUrl?.AbsoluteUri,
@@ -65,7 +69,7 @@ public sealed record ResetFeedPresentation(bool IsVisible, ResetFeedRow? Latest,
             var elapsed = now - reset.AnnouncedAt;
             var unit = elapsed < TimeSpan.FromHours(1) ? TimeSpan.FromMinutes(1) :
                 elapsed < TimeSpan.FromDays(1) ? TimeSpan.FromHours(1) : TimeSpan.FromDays(1);
-            nextChange = AddClamped(now, TimeSpan.FromTicks(unit.Ticks - elapsed.Ticks % unit.Ticks));
+            nextChange = Earlier(nextChange, AddClamped(now, TimeSpan.FromTicks(unit.Ticks - elapsed.Ticks % unit.Ticks)));
         }
 
         ResetFeedRow? forecast = null;

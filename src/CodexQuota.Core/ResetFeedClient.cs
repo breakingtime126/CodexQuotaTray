@@ -8,12 +8,14 @@ namespace CodexQuota.Core;
 /// <summary>Reads the optional PowerShell JSON result. No account or quota inputs, and no direct HTTP production path.</summary>
 public sealed class ResetFeedClient : IDisposable
 {
-    public static readonly Uri Endpoint = new("https://codex-resets.com/api/v1/status");
+    public static readonly Uri Endpoint = new("https://raw.githubusercontent.com/breakingtime126/CodexQuotaTray/reset-data/status.json");
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(12);
     private readonly Func<string?, CancellationToken, Task<HttpResponseMessage>> _read;
     private readonly IDisposable _owner;
     private readonly TimeSpan _timeout;
     private readonly ResetFeedTransport _transport;
+    private readonly bool _requireMirror;
+    private readonly Func<DateTimeOffset> _utcNow = () => DateTimeOffset.UtcNow;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ResetFeedSnapshot? _cache;
     private EntityTagHeaderValue? _etag;
@@ -27,6 +29,7 @@ public sealed class ResetFeedClient : IDisposable
         _owner = fileHandler;
         _timeout = DefaultTimeout;
         _transport = ResetFeedTransport.PowerShell7Json;
+        _requireMirror = true;
     }
 
     private static PowerShellResetFeedHandler CreateFileHandler()
@@ -37,10 +40,12 @@ public sealed class ResetFeedClient : IDisposable
 
     /// <summary>Internal synthetic-response seam only. No built-in direct network handler exists.</summary>
     internal ResetFeedClient(HttpMessageHandler handler, TimeSpan? timeout = null,
-        ResetFeedTransport transport = ResetFeedTransport.Injected)
+        ResetFeedTransport transport = ResetFeedTransport.Injected, bool requireMirror = false, Func<DateTimeOffset>? utcNow = null)
     {
         _timeout = timeout ?? DefaultTimeout;
         _transport = transport;
+        _requireMirror = requireMirror;
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         if (_timeout <= TimeSpan.Zero || _timeout > TimeSpan.FromMinutes(2)) throw new ArgumentOutOfRangeException(nameof(timeout));
         var invoker = new HttpMessageInvoker(handler, disposeHandler: true);
         _owner = invoker;
@@ -93,6 +98,7 @@ public sealed class ResetFeedClient : IDisposable
             httpStatus = (int)response.StatusCode;
             if (response.StatusCode == HttpStatusCode.NotModified)
                 return _cache is not null && _etag is not null &&
+                    (!_requireMirror || _cache.UpstreamSuccessAtUtc is { } success && ResetFeedMirror.IsFresh(success, _utcNow())) &&
                     (response.Headers.ETag is not { } responseTag || responseTag.Tag == _etag.Tag)
                     ? Finish(ResetFeedReadStatus.NotModified, _cache)
                     : Finish(ResetFeedReadStatus.InvalidResponse, failure: ResetFeedFailure.InvalidCache);
@@ -136,7 +142,9 @@ public sealed class ResetFeedClient : IDisposable
                 body.Write(buffer, 0, count);
             }
             stage = ResetFeedStage.Parse;
-            if (!ResetFeedParser.TryParse(body.ToArray(), out var snapshot))
+            ResetFeedSnapshot? snapshot;
+            if (!(_requireMirror ? ResetFeedMirror.TryParse(body.ToArray(), _utcNow(), out snapshot) :
+                ResetFeedParser.TryParse(body.ToArray(), out snapshot)))
                 return Finish(ResetFeedReadStatus.InvalidResponse, failure: ResetFeedFailure.InvalidSchema);
             _cache = snapshot;
             var etag = response.Headers.ETag;

@@ -54,6 +54,14 @@ jobs:
       - name: Core tests and net48 single EXE
         shell: bash
         run: bash scripts/build-lightweight.sh
+      - name: Public mirror and PowerShell transport offline tests
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]"7.5") { throw "PowerShell 7.5+ is required for reset transport tests" }
+          python -m unittest discover -s scripts -p test_reset_mirror.py -v
+          if ($LASTEXITCODE -ne 0) { throw "Mirror producer tests failed" }
+          ./scripts/test-reset-powershell.ps1
+          ./scripts/test-reset-producer-core.ps1 -CoreDll ./src/CodexQuota.Core/bin/Release/net8.0/CodexQuota.Core.dll
       - name: Check binary version and hash
         id: hash
         shell: pwsh

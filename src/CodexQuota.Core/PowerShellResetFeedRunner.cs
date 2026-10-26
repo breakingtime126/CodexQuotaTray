@@ -65,7 +65,7 @@ public sealed class PowerShellResetFeedRunner : IDisposable
             var lockPath = Path.Combine(_directory, ".reset-state.lock");
             RejectReparsePoint(lockPath);
             lockLease = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            var scriptPath = Path.Combine(_directory, "Fetch-ResetState-0.2.32.ps1");
+            var scriptPath = Path.Combine(_directory, "Fetch-ResetState-0.2.35.ps1");
             scriptLease = PrepareScript(scriptPath, _script());
             requestPath = Path.Combine(_directory, ".reset-request." + request.RequestId + ".json");
             var requestBytes = JsonSerializer.SerializeToUtf8Bytes(new { schemaVersion = 1, requestId = request.RequestId, etag = request.ETag });

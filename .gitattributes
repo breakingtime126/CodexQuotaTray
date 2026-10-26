@@ -1,2 +1,5 @@
 *.cmd.template text eol=crlf
 *.ps1.template text eol=crlf
+
+# Embedded reset script must be byte-identical in Windows and Linux builds.
+src/CodexQuota.Core/Resources/Fetch-ResetState.ps1 text eol=lf

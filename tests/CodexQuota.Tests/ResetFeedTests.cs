@@ -16,6 +16,61 @@ static class ResetFeedTests
 
     public static void Register(Action<string, Action> test, Action<string, Func<Task>> asyncTest)
     {
+        test("reset mirror: independent freshness bounds retain historical latest events", () =>
+        {
+            foreach (var age in new[] { TimeSpan.Zero, TimeSpan.FromMinutes(59), TimeSpan.FromMinutes(-5) })
+            {
+                Check.True(ResetFeedMirror.TryParse(Encoding.UTF8.GetBytes(Mirror(Now - age)), Now, out var snapshot));
+                Check.Equal(Now - age, snapshot!.UpstreamSuccessAtUtc!.Value);
+            }
+            foreach (var age in new[] { TimeSpan.FromMinutes(60), TimeSpan.FromDays(1), TimeSpan.FromMinutes(-5) - TimeSpan.FromSeconds(1) })
+                Check.False(ResetFeedMirror.TryParse(Encoding.UTF8.GetBytes(Mirror(Now - age)), Now, out _));
+            Check.False(ResetFeedMirror.TryParse(Encoding.UTF8.GetBytes(Envelope(Latest)), Now, out _));
+            var valid = Mirror(Now);
+            foreach (var invalid in new[] {
+                valid.Replace("\"mirrorSchemaVersion\":1", "\"mirrorSchemaVersion\":2"),
+                valid.Replace("\"mirrorSchemaVersion\":1", "\"mirrorSchemaVersion\":1,\"mirrorSchemaVersion\":1"),
+                valid.Replace(ResetFeedMirror.Source, "https://invalid.example/status"),
+                valid.Replace(JsonSerializer.Serialize(Now.ToString("o")), JsonSerializer.Serialize("2026-10-20T07:00:00")),
+                valid.Replace("\"total\":64", "\"total\":-1") })
+                Check.False(ResetFeedMirror.TryParse(Encoding.UTF8.GetBytes(invalid), Now, out _));
+            Check.False(ResetFeedMirror.TryParse(new byte[65537], Now, out _));
+        });
+        test("reset mirror: presentation expires without another network fetch", () =>
+        {
+            Check.True(ResetFeedMirror.TryParse(Encoding.UTF8.GetBytes(Mirror(Now)), Now, out var snapshot));
+            var result = new ResetFeedReadResult(ResetFeedReadStatus.Success, snapshot);
+            Check.True(ResetFeedPresentation.Create(result, Now).IsVisible);
+            Check.True(ResetFeedPresentation.Create(result, Now).NextChange <= Now.AddHours(1));
+            Check.False(ResetFeedPresentation.Create(result, Now.AddHours(1)).IsVisible);
+        });
+        asyncTest("reset mirror: 304 never refreshes upstream timestamp and stale cache is hidden", async () =>
+        {
+            var now = Now;
+            var calls = 0;
+            using var client = new ResetFeedClient(new Handler((request, _) =>
+            {
+                Check.Equal("raw.githubusercontent.com", request.RequestUri!.Host);
+                var response = ++calls == 1 ? Response(Mirror(Now)) : new HttpResponseMessage(HttpStatusCode.NotModified);
+                response.Headers.ETag = new EntityTagHeaderValue("\"mirror\"");
+                response.Headers.Date = now; // A fresh HTTP Date cannot freshen an old upstream success.
+                return Task.FromResult(response);
+            }), requireMirror: true, utcNow: () => now);
+            Check.True((await client.FetchAsync()).IsSuccess);
+            now = Now.AddMinutes(59);
+            var cached = await client.FetchAsync();
+            Check.Equal(ResetFeedReadStatus.NotModified, cached.Status);
+            Check.Equal(Now, cached.Snapshot!.UpstreamSuccessAtUtc!.Value);
+            now = Now.AddHours(1);
+            var stale = await client.FetchAsync();
+            Check.False(stale.IsSuccess);
+            Check.Null(stale.Snapshot);
+        });
+        asyncTest("reset mirror: production policy rejects original unmirrored schema", async () =>
+        {
+            using var client = new ResetFeedClient(new Handler((_, _) => Task.FromResult(Response(Envelope(Latest)))), requireMirror: true, utcNow: () => Now);
+            Check.Equal(ResetFeedReadStatus.InvalidResponse, (await client.FetchAsync()).Status);
+        });
         test("reset feed: published v1 envelope supports current latest sample", () =>
         {
             var parsed = Parse(Envelope(Latest));
@@ -439,6 +494,10 @@ static class ResetFeedTests
             Check.False(policy.TryBegin(Now.AddHours(1)));
         });
     }
+
+    private static string Mirror(DateTimeOffset success) =>
+        "{\"mirrorSchemaVersion\":1,\"upstreamSuccessAtUtc\":" + JsonSerializer.Serialize(success.ToString("o")) +
+        ",\"source\":" + JsonSerializer.Serialize(ResetFeedMirror.Source) + "," + Envelope(Latest).Substring(1);
 
     private static string Envelope(string latest = "null", string scheduled = "null", string watch = "null") =>
         """{"data":{"latest_reset":""" + latest + ""","scheduled_reset":""" + scheduled + ""","active_watch":""" +

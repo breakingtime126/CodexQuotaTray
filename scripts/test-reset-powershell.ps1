@@ -16,7 +16,7 @@ $expectedOutput = Join-Path $work 'reset-state.json'
 $passed = 0
 function Assert-True([bool]$Condition, [string]$Name) { if (-not $Condition) { throw "FAIL: $Name" }; $script:passed++ }
 function Assert-Rejected([scriptblock]$Action, [string]$Name) { $rejected = $false; try { $null = & $Action } catch { $rejected = $true }; Assert-True $rejected $Name }
-function New-TestResponse([int]$Status = 200, [byte[]]$Bytes = ([Text.Encoding]::UTF8.GetBytes('{"data":{},"meta":{}}'))) {
+function New-TestResponse([int]$Status = 200, [byte[]]$Bytes = ([Text.Encoding]::UTF8.GetBytes('{"mirrorSchemaVersion":1,"upstreamSuccessAtUtc":"2026-10-26T09:00:00Z","source":"https://codex-resets.com/api/v1/status","data":{},"meta":{}}'))) {
     $response = [Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]$Status)
     $response.Content = [Net.Http.ByteArrayContent]::new($Bytes)
     return $response
@@ -77,7 +77,7 @@ try {
     foreach ($etag in @('*', 'abc', 'w/"abc"', '"a", "b"', "`"a`"`n", "`"a`r`nb`"", ' "a"', ('"' + ('a' * 255) + '"'), 123)) { Assert-True (-not (Test-EntityTag $etag)) 'Invalid ETag rejected' }
     $request = New-StatusRequest 'W/"cached"'
     try {
-        Assert-True ($request.Method.Method -ceq 'GET' -and $request.RequestUri.AbsoluteUri -ceq 'https://codex-resets.com/api/v1/status' -and $request.RequestUri.Query -ceq '') 'Fixed GET endpoint without query'
+        Assert-True ($request.Method.Method -ceq 'GET' -and $request.RequestUri.AbsoluteUri -ceq 'https://raw.githubusercontent.com/breakingtime126/CodexQuotaTray/reset-data/status.json' -and $request.RequestUri.Query -ceq '') 'Fixed GET endpoint without query'
         Assert-True ($request.Headers.IfNoneMatch.ToString() -ceq 'W/"cached"') 'If-None-Match retained'
         Assert-True ($request.Headers.CacheControl.NoCache -and $request.Headers.CacheControl.MaxAge -eq [TimeSpan]::Zero) 'Cache-Control no-cache/max-age=0'
         Assert-True ($request.Headers.Pragma.ToString() -ceq 'no-cache' -and $request.Headers.Accept.ToString() -ceq 'application/json') 'Pragma and Accept headers'
@@ -128,6 +128,13 @@ try {
     Assert-True ([Text.Encoding]::UTF8.GetByteCount($exact) -eq 65536) 'Exact-bound fixture size'
     Assert-True ((Convert-ApiState ([Text.Encoding]::UTF8.GetBytes($exact))).status -ceq 'Success') 'Exactly 64 KiB accepted'
 
+    $mirrorFixture = '{"mirrorSchemaVersion":1,"upstreamSuccessAtUtc":"2026-10-26T09:00:00Z","source":"https://codex-resets.com/api/v1/status",' + $fixture.Substring(1)
+    $mirrorState = Convert-MirrorState ([Text.Encoding]::UTF8.GetBytes($mirrorFixture))
+    Assert-True ($mirrorState.mirror.upstreamSuccessAtUtc -ceq '2026-10-26T09:00:00Z') 'Actual upstream success timestamp preserved, not replaced with local time'
+    Assert-True ($mirrorState.data.latest_reset.at -ceq '2020-01-01T00:00:00Z') 'Mirror preserves historical reset independently'
+    foreach ($invalidMirror in @($fixture, $mirrorFixture.Replace('"mirrorSchemaVersion":1', '"mirrorSchemaVersion":2'), $mirrorFixture.Replace('"mirrorSchemaVersion":1', '"mirrorSchemaVersion":1,"mirrorSchemaVersion":1'), $mirrorFixture.Replace('https://codex-resets.com/api/v1/status', 'https://invalid.example/status'))) {
+        Assert-Rejected { Convert-MirrorState ([Text.Encoding]::UTF8.GetBytes($invalidMirror)) } 'Mirror schema/provenance mandatory'
+    }
     foreach ($status in @(304, 429, 500)) {
         $response = New-TestResponse $status
         $response.Headers.ETag = [Net.Http.Headers.EntityTagHeaderValue]::Parse('W/"response"')
@@ -153,7 +160,7 @@ try {
         $null = $response.Headers.TryAddWithoutValidation('ETag', '"a", "b"')
         Assert-True ($null -eq (Get-ResponseETag $response)) 'Multiple response ETags ignored'
     } finally { $response.Dispose() }
-    foreach ($type in @($null, 'application/json', 'application/json; charset=utf-8', 'text/html')) {
+    foreach ($type in @($null, 'application/json', 'application/json; charset=utf-8', 'text/plain; charset=utf-8', 'text/html')) {
         $response = New-TestResponse
         if ($null -ne $type) { $response.Content.Headers.ContentType = [Net.Http.Headers.MediaTypeHeaderValue]::Parse($type) }
         try {

@@ -1,4 +1,4 @@
-# Public endpoint only. Preserve system TLS/proxy routing; never send credentials.
+# Fixed GitHub public mirror only; redirects are rejected, with no original-site fallback. Preserve system TLS/proxy routing; never send credentials.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')][string]$RequestId,
@@ -87,7 +87,7 @@ function Get-ProxyFailureCode($Proxy) {
     return $null
 }
 function New-StatusRequest($ETag) {
-    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, 'https://codex-resets.com/api/v1/status')
+    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, 'https://raw.githubusercontent.com/breakingtime126/CodexQuotaTray/reset-data/status.json')
     try {
         $cacheControl = [Net.Http.Headers.CacheControlHeaderValue]::new()
         $cacheControl.NoCache = $true
@@ -159,6 +159,22 @@ function Convert-ApiState([byte[]]$Bytes) {
     # Preserve all original API data/meta; past reset timestamps remain valid.
     New-State 'Success' $api.data $api.meta $null 200
 }
+function Convert-MirrorState([byte[]]$Bytes) {
+    if ($Bytes.Length -gt $limit) { Throw-StateFailure 'ResponseTooLarge' }
+    $mirror = Convert-StrictJson $Bytes
+    $required = @('mirrorSchemaVersion', 'upstreamSuccessAtUtc', 'source', 'data', 'meta')
+    if (@($mirror.psbase.Keys).Count -ne 5) { Throw-StateFailure 'ParseFailed' }
+    foreach ($key in $required) { if (-not (@($mirror.psbase.Keys) -ccontains $key)) { Throw-StateFailure 'ParseFailed' } }
+    if (($mirror.mirrorSchemaVersion -isnot [long] -and $mirror.mirrorSchemaVersion -isnot [int]) -or
+        $mirror.mirrorSchemaVersion -ne 1 -or $mirror.source -cne 'https://codex-resets.com/api/v1/status' -or
+        $mirror.upstreamSuccessAtUtc -isnot [string] -or $mirror.upstreamSuccessAtUtc.Length -gt 64 -or
+        $mirror.data -isnot [Collections.IDictionary] -or $mirror.meta -isnot [Collections.IDictionary]) { Throw-StateFailure 'ParseFailed' }
+    # Core independently validates timestamp, TTL, provenance and complete API schema.
+    $state = New-State 'Success' $mirror.data $mirror.meta $null 200
+    $state['mirror'] = [ordered]@{ mirrorSchemaVersion = $mirror.mirrorSchemaVersion
+        upstreamSuccessAtUtc = $mirror.upstreamSuccessAtUtc; source = $mirror.source }
+    return $state
+}
 function Convert-HttpResponse([Net.Http.HttpResponseMessage]$Response, [Threading.CancellationToken]$Token) {
     $httpStatus = [int]$Response.StatusCode
     $etag = Get-ResponseETag $Response
@@ -172,7 +188,8 @@ function Convert-HttpResponse([Net.Http.HttpResponseMessage]$Response, [Threadin
             $types = @($typeValues)
             $contentType = $null
             if ($types.Count -ne 1 -or -not [Net.Http.Headers.MediaTypeHeaderValue]::TryParse($types[0], [ref]$contentType) -or
-                -not [string]::Equals($contentType.MediaType, 'application/json', [StringComparison]::OrdinalIgnoreCase)) { Throw-StateFailure 'ContentType' }
+                (-not [string]::Equals($contentType.MediaType, 'application/json', [StringComparison]::OrdinalIgnoreCase) -and
+                 -not [string]::Equals($contentType.MediaType, 'text/plain', [StringComparison]::OrdinalIgnoreCase))) { Throw-StateFailure 'ContentType' }
         }
         $stage = 'ReadFailed'
         if ($null -ne $Response.Content.Headers.ContentLength -and $Response.Content.Headers.ContentLength -gt $limit) { Throw-StateFailure 'ResponseTooLarge' }
@@ -185,7 +202,7 @@ function Convert-HttpResponse([Net.Http.HttpResponseMessage]$Response, [Threadin
         }
         $Token.ThrowIfCancellationRequested()
         $stage = 'ParseFailed'
-        $state = Convert-ApiState $buffered.ToArray()
+        $state = Convert-MirrorState $buffered.ToArray()
         $Token.ThrowIfCancellationRequested()
         $state.etag = $etag
         $state.retryAfterSeconds = $retryAfter
@@ -217,6 +234,9 @@ if ($SelfTest) {
     $fixture = '{"data":{"latest_reset":{"at":"2020-01-01T00:00:00Z"},"scheduled_reset":null,"active_watch":{"unknownFutureShape":[1,2]}},"meta":{"api_version":"v1"}}'
     $state = Convert-ApiState ([Text.Encoding]::UTF8.GetBytes($fixture))
     if ($state.status -ne 'Success' -or $state.data.latest_reset.at -ne '2020-01-01T00:00:00Z' -or $state.data.active_watch.unknownFutureShape.Count -ne 2) { throw 'Fixture validation failed' }
+    $mirrorFixture = '{"mirrorSchemaVersion":1,"upstreamSuccessAtUtc":"' + [DateTimeOffset]::UtcNow.ToString('o') + '","source":"https://codex-resets.com/api/v1/status",' + $fixture.Substring(1)
+    $state = Convert-MirrorState ([Text.Encoding]::UTF8.GetBytes($mirrorFixture))
+    if ($state.mirror.mirrorSchemaVersion -ne 1 -or $state.data.latest_reset.at -ne '2020-01-01T00:00:00Z') { throw 'Mirror fixture failed' }
     foreach ($invalid in @(([byte[]]::new(65537)), ([Text.Encoding]::UTF8.GetBytes('{"data":null,"meta":{}}')), ([Text.Encoding]::UTF8.GetBytes('{"data":{"x":1,"x":2},"meta":{}}')))) {
         $rejected = $false
         try { $null = Convert-ApiState $invalid } catch { $rejected = $true }

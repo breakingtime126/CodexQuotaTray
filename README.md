@@ -58,14 +58,16 @@
 
 “上次重置”和“预计重置”来自 [Codex Resets](https://codex-resets.com/api/docs) 的公共公告或第三方预测，**不是当前账号实际重置时间，也不保证预测会发生**。
 
-此附加功能需要标准位置安装的 PowerShell 7.5+，并由本机访问该服务。服务不可访问时隐藏相关提示，不影响额度、重置卡和 TPS；它与 GitHub 自动更新相互独立。
+从 **0.2.35** 起，本机通过本仓库的 GitHub 数据镜像读取公共信息，不再直接请求原网站。镜像通常每 10 分钟同步一次；GitHub 调度可能延迟，超过 60 分钟未成功同步的数据会隐藏，不影响额度、重置卡和 TPS。
+
+此附加功能仍需标准位置安装的 PowerShell 7.5+。没有有效预测时不显示“预计重置”；镜像与工具自动更新是两项独立功能。[镜像与数据来源说明](docs/reset-mirror.md)
 
 ## 开发与文档
 
 源码构建需要 .NET SDK 8（C# 12）或兼容更新版；运行 `scripts/build-lightweight.ps1`（Windows）或 `scripts/build-lightweight.sh`。
 
 - [输出速度的计算与含义](docs/OUTPUT-SPEED.md)
-- [当前版本验证记录与已知限制](docs/VERIFY-0.2.34.md)
+- [当前版本验证记录与已知限制](docs/VERIFY-0.2.35.md)
 - [其他验证记录](docs/VERIFICATION.md)
 - [性能说明](docs/PERFORMANCE.md)
 

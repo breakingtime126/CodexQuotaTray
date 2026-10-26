@@ -16,13 +16,14 @@ $now = [DateTimeOffset]::UtcNow
 $request = [CodexQuota.Core.ResetFeedFileRequest]::new($RequestId, $now, $null)
 $generated = $now.ToString('o')
 $api = '{"data":{"latest_reset":{"id":"observed-history","reset_type":"regular","announced_at":"2020-01-01T00:00:00Z","text":"Historical observation.","source":{"type":"observed"}},"scheduled_reset":null,"active_watch":null,"stats":{"total":1,"last_reset_at":"2020-01-01T00:00:00Z","days_since_last":1,"avg_interval_days":null}},"meta":{"api_version":"v1","generated_at":"' + $generated + '"}}'
-$state = Convert-ApiState ([Text.Encoding]::UTF8.GetBytes($api))
+$mirror = '{"mirrorSchemaVersion":1,"upstreamSuccessAtUtc":"' + $generated + '","source":"https://codex-resets.com/api/v1/status",' + $api.Substring(1)
+$state = Convert-MirrorState ([Text.Encoding]::UTF8.GetBytes($mirror))
 $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($state | ConvertTo-Json -Depth 16 -Compress))
 $response = [CodexQuota.Core.ResetFeedFileProtocol]::Parse($bytes, $request, [DateTimeOffset]::UtcNow)
 try {
     $body = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
     $snapshot = $null
-    if (-not [CodexQuota.Core.ResetFeedParser]::TryParse($body, [ref]$snapshot)) { throw 'Producer body was rejected by Core.' }
+    if (-not [CodexQuota.Core.ResetFeedMirror]::TryParse($body, [DateTimeOffset]::UtcNow, [ref]$snapshot)) { throw 'Producer body was rejected by Core.' }
     $result = [CodexQuota.Core.ResetFeedReadResult]::new([CodexQuota.Core.ResetFeedReadStatus]::Success, $snapshot, $null, $null)
     $view = [CodexQuota.Core.ResetFeedPresentation]::Create($result, [DateTimeOffset]::UtcNow)
     if ($null -eq $view.Latest -or $null -ne $view.Forecast -or $null -ne $view.EventIdentity) { throw 'Historical latest-only presentation failed.' }
