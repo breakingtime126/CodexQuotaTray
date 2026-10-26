@@ -1,0 +1,13 @@
+name: Temporary native schedule probe
+on:
+  schedule:
+    - cron: '7-57/10 * * * *'
+permissions: {}
+jobs:
+  timestamp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Print UTC timestamp
+        shell: bash
+        run: date -u '+%Y-%m-%dT%H:%M:%SZ'
