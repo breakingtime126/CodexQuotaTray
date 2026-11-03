@@ -26,7 +26,7 @@ internal static class TrayMenuSmoke
         var themeWarning = new ToolStripMenuItem("主题提示") { Visible = false };
         var startup = new ToolStripMenuItem("开机启动") { Checked = true, Enabled = false };
         var startupWarning = new ToolStripMenuItem("启动提示") { Visible = false };
-        var autoReset = new ToolStripMenuItem("到期自动用卡") { Checked = true, CheckOnClick = false };
+        var autoReset = new ToolStripMenuItem("自动使用重置卡") { Checked = true, CheckOnClick = false };
         var autoUpdate = new ToolStripMenuItem("自动更新") { Checked = true, CheckOnClick = false, Enabled = false };
         var diagnostics = new ToolStripMenuItem("查看连接诊断…");
         var latest = new ToolStripMenuItem("上次重置原文") { Visible = false };

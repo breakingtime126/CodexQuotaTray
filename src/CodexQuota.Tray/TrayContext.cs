@@ -10,7 +10,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly TrayContextMenuStrip _menu;
     private readonly ToolStripMenuItem _refresh = new("立即刷新");
     private readonly ToolStripMenuItem _sourceMenu = new("数据来源");
-    private readonly ToolStripMenuItem _autoResetItem = new("到期自动用卡") { CheckOnClick = false };
+    private readonly ToolStripMenuItem _autoResetItem = new("自动使用重置卡") { CheckOnClick = false };
     private readonly ToolStripMenuItem _settingsMenu = new("设置");
     private readonly ToolStripMenuItem _helpMenu = new("帮助与诊断");
     private readonly AutoResetPreferenceStore _autoResetPreferences = new();
@@ -627,7 +627,6 @@ internal sealed class TrayContext : ApplicationContext
             if (speedView != _speedView) { _speedView = speedView; _hoverState = null; }
         }
         _autoResetItem.Checked = _autoReset.Enabled;
-        _autoResetItem.Text = _autoResetPreference.IsWarning ? "到期自动用卡（设置有提示）" : "到期自动用卡";
         _autoResetItem.ToolTipText = "在重置卡到期前 60 秒（1 分钟）自动尝试使用。\n" + AutoResetStatusText + "\n" + _autoResetPreference.Explanation +
             "\n仅自动尝试免费获得且即将到期的重置卡；最终资格由服务端决定，不购买付费额度。";
         _autoResetItem.AccessibleDescription = _autoResetItem.ToolTipText;
