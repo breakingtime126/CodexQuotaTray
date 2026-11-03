@@ -22,6 +22,32 @@ internal static class SubmenuPlacementTests
             }
         });
 
+        test("submenu placement: nested settings rows continue outward without covering the root", () =>
+        {
+            foreach (var left in new[] { false, true })
+            foreach (var scale in new[] { 1, 2, 3 })
+            {
+                var work = new Rectangle(-4000, -200, 4000, 2500);
+                var root = new Rectangle(left ? -600 : -4000, 0, 600, 500);
+                var settings = TrayMenuPlacement.CalculateSubmenu(root, Row(root, 100), work, new Size(350 * scale, 400));
+                var nested = TrayMenuPlacement.CalculateSubmenu(settings, Row(settings, 50), work,
+                    new Size(250 * scale, 200), preferLeft: left);
+                Check.True(work.Contains(settings) && work.Contains(nested));
+                Check.False(nested.IntersectsWith(root));
+                if (left) Check.Equal(settings.Left, nested.Right);
+                else Check.Equal(settings.Right, nested.Left);
+                Check.Equal(settings.Top + 50, nested.Top);
+            }
+        });
+        test("submenu placement: nested left preference falls back when only the right fits", () =>
+        {
+            var work = new Rectangle(0, 0, 1000, 800);
+            var parent = new Rectangle(50, 100, 300, 400);
+            var child = TrayMenuPlacement.CalculateSubmenu(parent, Row(parent, 50), work, new Size(260, 160), preferLeft: true);
+            Check.Equal(parent.Right, child.Left);
+            Check.True(work.Contains(child));
+        });
+
         test("submenu placement: shared right taskbar seam opens left on parent screen", () =>
         {
             var work = new Rectangle(0, 0, 1840, 1080);

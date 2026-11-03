@@ -10,6 +10,7 @@ internal sealed class TraySubmenuStrip : ToolStripDropDownMenu
 {
     private readonly TrayContextMenuStrip? _parentMenu;
     private bool _positioning, _constraining, _styling;
+    private ToolStrip? _observedOwner;
 
     public TraySubmenuStrip(TrayContextMenuStrip parentMenu)
     {
@@ -18,6 +19,7 @@ internal sealed class TraySubmenuStrip : ToolStripDropDownMenu
         Font = parentMenu.Font;
         ShowImageMargin = false;
         ShowCheckMargin = true;
+        ShowItemToolTips = true;
         DropShadowEnabled = true;
         parentMenu.LocationChanged += OnParentBoundsChanged;
         parentMenu.Layout += OnParentLayout;
@@ -44,6 +46,7 @@ internal sealed class TraySubmenuStrip : ToolStripDropDownMenu
 
     protected override void OnOpening(System.ComponentModel.CancelEventArgs e)
     {
+        ObserveOwner(OwnerItem?.Owner);
         RefreshConstraints();
         ApplySpacing();
         base.OnOpening(e);
@@ -59,6 +62,7 @@ internal sealed class TraySubmenuStrip : ToolStripDropDownMenu
 
     protected override void OnClosed(ToolStripDropDownClosedEventArgs e)
     {
+        ObserveOwner(null);
         base.OnClosed(e);
         // Do not carry the previous screen's cap into a reopen on a larger one.
         if (!IsDisposed) MaximumSize = Size.Empty;
@@ -116,11 +120,20 @@ internal sealed class TraySubmenuStrip : ToolStripDropDownMenu
     {
         bounds = Rectangle.Empty;
         if (_parentMenu is not { IsDisposed: false, IsHandleCreated: true } parent ||
-            parent.AnchoredWorkArea is not { } workArea || OwnerItem is not { } item || item.Owner != parent)
+            parent.AnchoredWorkArea is not { } workArea || OwnerItem is not { } item ||
+            item.Owner is not { IsDisposed: false, IsHandleCreated: true } owner)
             return false;
 
-        var ownerRow = parent.RectangleToScreen(item.Bounds);
-        bounds = TrayMenuPlacement.CalculateSubmenu(parent.Bounds, ownerRow, workArea, size);
+        // A nested source/theme menu belongs to Settings, not directly to the root.
+        // Follow the actual owner chain but keep the root's monitor anchor.
+        ToolStrip? ancestor = owner;
+        while (ancestor != parent && ancestor is ToolStripDropDown dropDown)
+            ancestor = dropDown.OwnerItem?.Owner;
+        if (ancestor != parent) return false;
+        var ownerRow = owner.RectangleToScreen(item.Bounds);
+        var preferLeft = owner is ToolStripDropDown ownerDropDown &&
+            ownerDropDown.OwnerItem?.Owner is { } previous && owner.Left < previous.Left;
+        bounds = TrayMenuPlacement.CalculateSubmenu(owner.Bounds, ownerRow, workArea, size, preferLeft);
         return true;
     }
 
@@ -197,12 +210,29 @@ internal sealed class TraySubmenuStrip : ToolStripDropDownMenu
         }
     }
 
+    private void ObserveOwner(ToolStrip? owner)
+    {
+        if (_observedOwner == owner) return;
+        if (_observedOwner is { } previous)
+        {
+            previous.LocationChanged -= OnParentBoundsChanged;
+            previous.Layout -= OnParentLayout;
+        }
+        _observedOwner = owner == _parentMenu ? null : owner;
+        if (_observedOwner is { } current)
+        {
+            current.LocationChanged += OnParentBoundsChanged;
+            current.Layout += OnParentLayout;
+        }
+    }
+
     private void OnParentBoundsChanged(object? sender, EventArgs e) { if (Visible) Reposition(); }
     private void OnParentLayout(object? sender, LayoutEventArgs e) { if (Visible) Reposition(); }
     private void OnParentDisposed(object? sender, EventArgs e) => Dispose();
 
     protected override void Dispose(bool disposing)
     {
+        if (disposing) ObserveOwner(null);
         if (disposing && _parentMenu is { } parent)
         {
             parent.LocationChanged -= OnParentBoundsChanged;

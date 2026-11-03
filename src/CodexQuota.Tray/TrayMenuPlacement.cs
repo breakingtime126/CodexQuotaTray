@@ -14,7 +14,7 @@ internal static class TrayMenuPlacement
     /// area. The owner row and both menus are in physical screen pixels. Never
     /// infer a monitor from a provisional child rectangle across a screen seam.
     /// </summary>
-    public static Rectangle CalculateSubmenu(Rectangle parent, Rectangle ownerRow, Rectangle workArea, Size menuSize)
+    public static Rectangle CalculateSubmenu(Rectangle parent, Rectangle ownerRow, Rectangle workArea, Size menuSize, bool preferLeft = false)
     {
         if (workArea.Width <= 0 || workArea.Height <= 0)
             throw new ArgumentOutOfRangeException(nameof(workArea));
@@ -26,7 +26,8 @@ internal static class TrayMenuPlacement
         // Normal menus open right when the entire child fits. At a right-hand
         // taskbar/seam, open inward to the left. If neither side fits, use the
         // roomier side and clamp; overlap is preferable to another monitor.
-        var openRight = rightSpace >= width || (leftSpace < width && rightSpace >= leftSpace);
+        var openRight = preferLeft && leftSpace >= width ? false
+            : rightSpace >= width || (leftSpace < width && rightSpace >= leftSpace);
         long x = openRight ? parent.Right : (long)parent.Left - width;
         long y = ownerRow.Top;
         x = Math.Max(workArea.Left, Math.Min(x, (long)workArea.Right - width));

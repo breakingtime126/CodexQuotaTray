@@ -1,6 +1,6 @@
 # Automatic updates
 
-CodexQuotaTray checks the fixed public repository `breakingtime126/CodexQuotaTray` for stable updates. The initial updater-enabled EXE must be distributed once. Later releases are downloaded, verified, replaced at the same executable path and restarted automatically. Source, theme, startup and CLI preferences are preserved. The right-click menu exposes `自动更新` and `检查更新`; automatic checks use a six-hour interval with a 15-second startup delay.
+CodexQuotaTray checks the fixed public repository `breakingtime126/CodexQuotaTray` for stable updates. The initial updater-enabled EXE must be distributed once. Later releases are downloaded, verified, replaced at the same executable path and restarted automatically. Source, theme, startup and CLI preferences are preserved. The right-click menu exposes `设置 → 自动更新` and top-level `检查更新`; automatic checks use a ten-minute interval with a 15-second startup delay.
 
 ## Release contract
 

@@ -29,6 +29,7 @@ internal static class Bootstrap
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int Run(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--menu") return TrayMenuSmoke.Run();
         if (args.Length == 1 && args[0] == "app-server") return Tests.FakeServer();
         if (args.Length == 1 && args[0] == "--read") return Tests.FakeQuotaReader();
         if (args.Length == 1 && args[0] == "--fake-descendant") { Thread.Sleep(30000); return 0; }

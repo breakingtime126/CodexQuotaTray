@@ -18,7 +18,10 @@ internal sealed class AutoUpdateController : IDisposable
     private bool _busy, _disposed;
     private DateTimeOffset _nextCheck = DateTimeOffset.MinValue;
 
-    public AutoUpdateController(ToolStripItemCollection menu, string? cli, Func<Task> exit)
+    internal ToolStripMenuItem AutomaticItem => _automatic;
+    internal ToolStripMenuItem CheckItem => _check;
+
+    public AutoUpdateController(string? cli, Func<Task> exit)
     {
         _cli = cli; _exit = exit;
         try
@@ -39,7 +42,6 @@ internal sealed class AutoUpdateController : IDisposable
             catch { MessageBox.Show("无法保存自动更新设置。", "Codex 更新", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         };
         _check.Click += async (_, _) => await CheckAsync(manual: true);
-        menu.Add(_automatic); menu.Add(_check);
         _timer.Tick += async (_, _) =>
         {
             if (UpdateCheckSchedule.IsDue(_automatic.Checked, DateTimeOffset.UtcNow, _nextCheck)) await CheckAsync(manual: false);

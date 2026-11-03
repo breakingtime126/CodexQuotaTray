@@ -10,8 +10,9 @@ internal sealed class TrayContext : ApplicationContext
     private readonly TrayContextMenuStrip _menu;
     private readonly ToolStripMenuItem _refresh = new("立即刷新");
     private readonly ToolStripMenuItem _sourceMenu = new("数据来源");
-    private readonly ToolStripMenuItem _autoResetItem = new("到期前 1 分钟自动使用重置卡") { CheckOnClick = false };
-    private readonly ToolStripMenuItem _autoResetStatus = new("自动使用重置卡：已关闭");
+    private readonly ToolStripMenuItem _autoResetItem = new("到期自动用卡") { CheckOnClick = false };
+    private readonly ToolStripMenuItem _settingsMenu = new("设置");
+    private readonly ToolStripMenuItem _helpMenu = new("帮助与诊断");
     private readonly AutoResetPreferenceStore _autoResetPreferences = new();
     private AutoResetPreferenceResult _autoResetPreference;
     private readonly AutoResetCreditController _autoReset = new();
@@ -104,7 +105,6 @@ internal sealed class TrayContext : ApplicationContext
             Renderer = new TrayMenuRenderer(),
             DropShadowEnabled = true
         };
-        _menu.Items.Add(_refresh);
         var exit = new ToolStripMenuItem("退出");
         exit.Click += async (_, _) => await CloseAsync();
         _startup.Click += (_, _) =>
@@ -133,8 +133,6 @@ internal sealed class TrayContext : ApplicationContext
             sourceChoices.Font = _menu.Font;
         }
         _sourceWarning.Click += (_, _) => ShowConnectionDiagnostics();
-        _menu.Items.Add(_sourceMenu);
-        _menu.Items.Add(_sourceWarning);
         _themeMenu.DropDown = new TraySubmenuStrip(_menu);
         foreach (var preference in new[] { ThemePreference.System, ThemePreference.Light, ThemePreference.Dark })
         {
@@ -145,27 +143,18 @@ internal sealed class TrayContext : ApplicationContext
         }
         _themeWarning.Click += (_, _) => MessageBox.Show(_themePreference.Explanation,
             "Codex 主题设置", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        _menu.Items.Add(_themeMenu);
-        _menu.Items.Add(_themeWarning);
-        _menu.Items.Add(_startup);
-        _menu.Items.Add(_startupWarning);
         _autoResetItem.Click += (_, _) => ToggleAutoReset();
-        _autoResetStatus.Click += (_, _) => ShowConnectionDiagnostics();
-        _menu.Items.Add(_autoResetItem);
-        _menu.Items.Add(_autoResetStatus);
-        _menu.Items.Add(new ToolStripSeparator());
         var diagnostics = new ToolStripMenuItem("查看连接诊断…");
         diagnostics.Click += (_, _) => ShowConnectionDiagnostics();
-        _menu.Items.Add(diagnostics);
         _resetLatestLink.Click += (_, _) => OpenResetSource(forecast: false);
         _resetForecastLink.Click += (_, _) => OpenResetSource(forecast: true);
-        _menu.Items.Add(_resetLatestLink);
-        _menu.Items.Add(_resetForecastLink);
         var about = new ToolStripMenuItem("关于 / 许可");
         about.Click += (_, _) => { using var dialog = new LicenseDialog(); dialog.ShowDialog(); };
-        _menu.Items.Add(about);
-        _updates = new AutoUpdateController(_menu.Items, _cliPath, CloseAsync);
-        _menu.Items.Add(exit);
+        _updates = new AutoUpdateController(_cliPath, CloseAsync);
+        TrayMenuLayout.Compose(_menu, _settingsMenu, _helpMenu,
+            _refresh, _sourceMenu, _sourceWarning, _themeMenu, _themeWarning,
+            _startup, _startupWarning, _autoResetItem, _updates.AutomaticItem,
+            diagnostics, _resetLatestLink, _resetForecastLink, about, _updates.CheckItem, exit);
         ApplyStartupState(_startupManager.Initialize());
         _refresh.Click += (_, _) => BeginRefresh();
         _tray = new NativeTrayIcon { ContextMenuStrip = _menu, Visible = false };
@@ -567,7 +556,7 @@ internal sealed class TrayContext : ApplicationContext
         // Disable the thread-safe switch before disk I/O, even when persistence fails.
         if (!enable) _autoReset.Enabled = false;
         _autoResetPreference = _autoResetPreferences.Save(enable);
-        // Opt-in is effective only after an atomic durable save succeeds.
+        // Explicit re-enabling is effective only after an atomic durable save succeeds.
         if (enable && _autoResetPreference.Status == AutoResetPreferenceStatus.Saved) _autoReset.Enabled = true;
         _autoResetSchedule.Reset();
         Render();
@@ -591,7 +580,7 @@ internal sealed class TrayContext : ApplicationContext
         WindowsAppTheme.Refresh();
         _menu.BackColor = SystemInformation.HighContrast ? SystemColors.Menu : TrayMenuPainter.SurfaceColor(WindowsAppTheme.IsDark);
         _menu.ForeColor = SystemInformation.HighContrast ? SystemColors.MenuText : TrayMenuPainter.InkColor(WindowsAppTheme.IsDark);
-        foreach (var submenu in new[] { _sourceMenu.DropDown, _themeMenu.DropDown })
+        foreach (var submenu in new[] { _settingsMenu.DropDown, _helpMenu.DropDown, _sourceMenu.DropDown, _themeMenu.DropDown })
         {
             submenu.BackColor = _menu.BackColor;
             submenu.ForeColor = _menu.ForeColor;
@@ -638,13 +627,10 @@ internal sealed class TrayContext : ApplicationContext
             if (speedView != _speedView) { _speedView = speedView; _hoverState = null; }
         }
         _autoResetItem.Checked = _autoReset.Enabled;
-        _autoResetItem.ToolTipText = AutoResetStatusText + "\n" + _autoResetPreference.Explanation +
+        _autoResetItem.Text = _autoResetPreference.IsWarning ? "到期自动用卡（设置有提示）" : "到期自动用卡";
+        _autoResetItem.ToolTipText = "在重置卡到期前 60 秒（1 分钟）自动尝试使用。\n" + AutoResetStatusText + "\n" + _autoResetPreference.Explanation +
             "\n仅自动尝试免费获得且即将到期的重置卡；最终资格由服务端决定，不购买付费额度。";
         _autoResetItem.AccessibleDescription = _autoResetItem.ToolTipText;
-        _autoResetStatus.Text = _autoResetPreference.Status == AutoResetPreferenceStatus.SaveFailed
-            ? (_autoResetPreference.Enabled ? "开启未保存，自动使用仍关闭…" : "本次已关闭，重启可能重新开启…")
-            : _autoResetPreference.IsWarning ? "自动使用已关闭，设置有提示…" : "自动重置卡：" + AutoResetStatusText;
-        _autoResetStatus.ToolTipText = _autoResetItem.ToolTipText;
         var stale = _state.IsStale(now);
         var percent = _state.Quota?.DisplayPercent;
         var switching = _requests.SwitchPending;
@@ -749,7 +735,7 @@ internal sealed class TrayContext : ApplicationContext
         var text = $"CodexQuotaTray {version}\r\n" +
             $"设置状态：{_sourcePreference.Explanation}\r\n已保存来源：{_sourcePreference.PersistedSourceDescription}\r\n{_sourcePreference.ToSafeLogCode()}\r\n" +
             "主题设置：" + _themePreference.Explanation + "\r\n" + _themePreference.ToSafeLogCode() + "\r\n" +
-            "自动使用免费重置卡：" + AutoResetStatusText + "\r\n" + _autoResetPreference.Explanation + "\r\n" +
+            "自动使用免费重置卡（到期前 60 秒）：" + AutoResetStatusText + "\r\n" + _autoResetPreference.Explanation + "\r\n" +
             _autoResetPreference.ToSafeLogCode() + "\r\n" +
             _visibilityDiagnostic + "\r\n" + _visibilityExplanation + "\r\n" +
             SourceReadDiagnosticText.Format(snapshot) +

@@ -12,7 +12,7 @@ public sealed record AutoResetPreferenceResult(bool Enabled, AutoResetPreference
     public bool IsWarning => Status is AutoResetPreferenceStatus.Invalid or AutoResetPreferenceStatus.ReadFailed or AutoResetPreferenceStatus.SaveFailed;
     public string Explanation => Status switch
     {
-        AutoResetPreferenceStatus.Default => "默认关闭，需明确开启后才会自动使用免费重置卡",
+        AutoResetPreferenceStatus.Default => "默认开启，在免费重置卡到期前 60 秒自动尝试使用；可在设置中关闭",
         AutoResetPreferenceStatus.Loaded => "已读取自动使用重置卡设置",
         AutoResetPreferenceStatus.Saved => "自动使用重置卡设置已保存",
         AutoResetPreferenceStatus.Invalid => "设置无效，已安全关闭；可重新开启并保存",
@@ -25,7 +25,7 @@ public sealed record AutoResetPreferenceResult(bool Enabled, AutoResetPreference
         " status=" + (Enum.GetName(typeof(AutoResetPreferenceStatus), Status) ?? "Unknown");
 }
 
-/// <summary>Separate, fail-closed opt-in. Strict bounded JSON and atomic same-directory replacement.</summary>
+/// <summary>Separate preference: missing defaults on; invalid or unreadable data fails closed. Strict bounded JSON and atomic same-directory replacement.</summary>
 public sealed class AutoResetPreferenceStore
 {
     public const int MaximumBytes = 1024;
@@ -58,10 +58,36 @@ public sealed class AutoResetPreferenceStore
                 return new(false, AutoResetPreferenceStatus.Invalid);
             return new(enabled.GetBoolean(), AutoResetPreferenceStatus.Loaded);
         }
-        catch (FileNotFoundException) { return new(false, AutoResetPreferenceStatus.Default); }
-        catch (DirectoryNotFoundException) { return new(false, AutoResetPreferenceStatus.Default); }
+        catch (FileNotFoundException) { return MissingPreference(); }
+        catch (DirectoryNotFoundException) { return MissingPreference(); }
         catch (JsonException) { return new(false, AutoResetPreferenceStatus.Invalid); }
         catch (Exception error) when (IsFileError(error)) { return new(false, AutoResetPreferenceStatus.ReadFailed); }
+    }
+
+    private AutoResetPreferenceResult MissingPreference()
+    {
+        // DirectoryNotFound can also mean that an ancestor is a file, not a fresh install.
+        // Do not use File.Exists: it hides permission/I/O failures as a missing setting.
+        try
+        {
+            var path = Path.GetFullPath(_path);
+            while (path is not null)
+            {
+                try
+                {
+                    var attributes = File.GetAttributes(path);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                        (attributes & FileAttributes.Directory) == 0)
+                        return new(false, AutoResetPreferenceStatus.ReadFailed);
+                    return new(true, AutoResetPreferenceStatus.Default);
+                }
+                catch (FileNotFoundException) { }
+                catch (DirectoryNotFoundException) { }
+                path = Path.GetDirectoryName(path);
+            }
+        }
+        catch (Exception error) when (IsFileError(error)) { }
+        return new(false, AutoResetPreferenceStatus.ReadFailed);
     }
 
     public AutoResetPreferenceResult Save(bool enabled)

@@ -4,13 +4,48 @@ internal static class AutoResetPreferenceTests
 {
     public static void Register(Action<string, Action> test)
     {
-        test("auto reset preference: missing defaults off and does not create files", () => InDirectory(directory =>
+        test("auto reset preference: missing defaults on and does not create files", () => InDirectory(directory =>
         {
             var path = Path.Combine(directory, "missing", "auto-reset.json");
             var result = new AutoResetPreferenceStore(path).Load();
-            Check.False(result.Enabled);
+            Check.True(result.Enabled);
+            Check.True(result.Explanation.Contains("60 秒"));
             Check.Equal(AutoResetPreferenceStatus.Default, result.Status);
             Check.False(Directory.Exists(Path.GetDirectoryName(path)));
+        }));
+        test("auto reset preference: missing file in existing directory defaults on without writing", () => InDirectory(directory =>
+        {
+            var path = Path.Combine(directory, "auto-reset.json");
+            var result = new AutoResetPreferenceStore(path).Load();
+            Check.True(result.Enabled);
+            Check.Equal(AutoResetPreferenceStatus.Default, result.Status);
+            Check.False(File.Exists(path));
+        }));
+        test("auto reset preference: v1 explicit off and on survive upgrade unchanged", () => InDirectory(directory =>
+        {
+            var path = Path.Combine(directory, "auto-reset.json");
+            foreach (var enabled in new[] { false, true })
+            {
+                var original = "{\"version\":1,\"enabled\":" + (enabled ? "true" : "false") + "}\n";
+                File.WriteAllText(path, original);
+                var result = new AutoResetPreferenceStore(path).Load();
+                Check.Equal(enabled, result.Enabled);
+                Check.Equal(AutoResetPreferenceStatus.Loaded, result.Status);
+                Check.Equal(original, File.ReadAllText(path));
+            }
+        }));
+        test("auto reset preference: unreadable directory or blocked ancestor never enables default", () => InDirectory(directory =>
+        {
+            var blocker = Path.Combine(directory, "blocker");
+            File.WriteAllText(blocker, "not a directory");
+            foreach (var path in new[] { directory, Path.Combine(blocker, "auto-reset.json"),
+                Path.Combine(blocker, "missing", "auto-reset.json") })
+            {
+                var result = new AutoResetPreferenceStore(path).Load();
+                Check.False(result.Enabled);
+                Check.Equal(AutoResetPreferenceStatus.ReadFailed, result.Status);
+                Check.True(result.IsWarning);
+            }
         }));
         test("auto reset preference: atomic on/off roundtrip remains separate from source settings", () => InDirectory(directory =>
         {
@@ -74,7 +109,7 @@ internal static class AutoResetPreferenceTests
             var path = Path.Combine(directory, "auto-reset.json");
             var store = new AutoResetPreferenceStore(path);
             Check.Equal(AutoResetPreferenceStatus.Saved, store.Save(true).Status);
-            // Reading malformed content is non-mutating: never silently repairs/enables opt-in.
+            // Reading malformed content is non-mutating: never silently repairs/enables an invalid setting.
             const string invalid = "{\"version\":1,\"enabled\":true,\"unknown\":true}";
             File.WriteAllText(path, invalid);
             Check.False(store.Load().Enabled);

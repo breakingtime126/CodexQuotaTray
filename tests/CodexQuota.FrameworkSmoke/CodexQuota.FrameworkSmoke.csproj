@@ -17,6 +17,13 @@
     <Compile Include="../../src/CodexQuota.Tray/LogonSessionIdentity.cs" Link="LogonSessionIdentity.cs" />
     <Compile Include="../../src/CodexQuota.Tray/TrayVisibilityClient.cs" Link="TrayVisibilityClient.cs" />
     <Compile Include="../../src/CodexQuota.Tray/TrayVisibilityHelper.cs" Link="TrayVisibilityHelper.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TrayMenuLayout.cs" Link="TrayMenuLayout.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TrayContextMenuStrip.cs" Link="TrayContextMenuStrip.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TraySubmenuStrip.cs" Link="TraySubmenuStrip.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TrayMenuPlacement.cs" Link="TrayMenuPlacement.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TrayMenuRenderer.cs" Link="TrayMenuRenderer.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/TrayMenuPainter.cs" Link="TrayMenuPainter.cs" />
+    <Compile Include="../../src/CodexQuota.Tray/WindowsAppTheme.cs" Link="WindowsAppTheme.cs" />
     <EmbeddedResource Include="../../third_party/*.txt"><LogicalName>Legal.%(Filename)%(Extension)</LogicalName><WithCulture>false</WithCulture></EmbeddedResource>
   </ItemGroup>
   <Target Name="EmbedFrameworkDependencies" AfterTargets="ResolveReferences" BeforeTargets="PrepareResources">

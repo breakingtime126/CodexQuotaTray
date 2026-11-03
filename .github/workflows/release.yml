@@ -54,6 +54,13 @@ jobs:
       - name: Core tests and net48 single EXE
         shell: bash
         run: bash scripts/build-lightweight.sh
+      - name: Native menu structure smoke (no accounts or network)
+        shell: pwsh
+        run: |
+          dotnet build tests/CodexQuota.FrameworkSmoke -c Release -m:1
+          if ($LASTEXITCODE -ne 0) { throw 'Native menu smoke build failed' }
+          & ./tests/CodexQuota.FrameworkSmoke/bin/Release/net48/CodexQuotaFrameworkSmoke.exe --menu
+          if ($LASTEXITCODE -ne 0) { throw 'Native menu smoke failed' }
       - name: Public mirror and PowerShell transport offline tests
         shell: pwsh
         run: |
