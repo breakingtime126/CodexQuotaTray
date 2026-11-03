@@ -54,6 +54,7 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
     public event EventHandler? DoubleClick;
     public event EventHandler? HoverEntered;
     public event EventHandler? EnvironmentChanged;
+    public event EventHandler? ClockOrResumeChanged;
     public event Action<TrayDiagnostic>? Diagnostic;
     public event EventHandler? RegistrationUnavailable;
     public event EventHandler? Selected;
@@ -341,6 +342,12 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
                 EndHover();
             }
             EnvironmentChanged?.Invoke(this, EventArgs.Empty);
+            if (message.Msg == 0x001E) ClockOrResumeChanged?.Invoke(this, EventArgs.Empty);
+        }
+        else if (message.Msg == 0x0218 && message.WParam.ToInt64() is 7 or 18)
+        {
+            // PBT_APMRESUMESUSPEND / PBT_APMRESUMEAUTOMATIC: refresh current server state.
+            ClockOrResumeChanged?.Invoke(this, EventArgs.Empty);
         }
         else if ((uint)message.Msg == _taskbarCreated)
         {

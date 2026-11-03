@@ -7,6 +7,9 @@ public enum ResetCardDataStatus { NotReturned, Invalid, CountOnly, Details }
 public enum ResetCardExpiryKind { Date, Never, Unknown }
 public sealed record ResetCard(ResetCardExpiryKind ExpiryKind, DateTimeOffset? ExpiresAt)
 {
+    // Opaque identifier is never displayed or logged. Required for targeted redemption.
+    public string? Id { get; init; }
+
     // The service supplies Unix seconds; keep all of that precision in both the
     // visible card and its accessible/fallback text, using the computer's local time.
     public string ExpiryText(DateTimeOffset now)
@@ -43,7 +46,7 @@ public sealed record ResetCards(ResetCardDataStatus Status, long AvailableCount,
         foreach (var row in credits.EnumerateArray())
         {
             // Only available, recognized reset cards belong in this expiry list. Ignore titles,
-            // descriptions and all redemption methods; never turn unknown types into usable cards.
+            // descriptions; never turn unknown types into usable cards.
             if (row.ValueKind != JsonValueKind.Object || ReadString(row, "status") != "available" ||
                 ReadString(row, "resetType") != "codexRateLimits" || ReadString(row, "id") is not { Length: > 0 } id ||
                 !ids.Add(id)) continue;
@@ -57,7 +60,7 @@ public sealed record ResetCards(ResetCardDataStatus Status, long AvailableCount,
                     catch (ArgumentOutOfRangeException) { /* Unknown is not the same as never expires. */ }
                 }
             }
-            cards.Add(card);
+            cards.Add(card with { Id = id });
         }
         // Match the official client: earliest expiry first, count authoritative. Equal dates
         // remain separate cards. The backend can cap details, so never synthesize missing rows.

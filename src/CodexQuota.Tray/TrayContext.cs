@@ -10,6 +10,12 @@ internal sealed class TrayContext : ApplicationContext
     private readonly TrayContextMenuStrip _menu;
     private readonly ToolStripMenuItem _refresh = new("立即刷新");
     private readonly ToolStripMenuItem _sourceMenu = new("数据来源");
+    private readonly ToolStripMenuItem _autoResetItem = new("到期前 1 分钟自动使用重置卡") { CheckOnClick = false };
+    private readonly ToolStripMenuItem _autoResetStatus = new("自动使用重置卡：已关闭");
+    private readonly AutoResetPreferenceStore _autoResetPreferences = new();
+    private AutoResetPreferenceResult _autoResetPreference;
+    private readonly AutoResetCreditController _autoReset = new();
+    private readonly AutoResetWakeSchedule _autoResetSchedule = new();
     private readonly ToolStripMenuItem _themeMenu = new("主题");
     private readonly ToolStripMenuItem _themeWarning = new("主题设置有提示…") { Visible = false };
     private readonly Dictionary<ThemePreference, ToolStripMenuItem> _themeItems = new();
@@ -79,6 +85,8 @@ internal sealed class TrayContext : ApplicationContext
         _cliPath = cliPath;
         _sourcePreference = _sourcePreferences.Load();
         _themePreference = _themePreferences.Load();
+        _autoResetPreference = _autoResetPreferences.Load();
+        _autoReset.Enabled = _autoResetPreference.Enabled;
         WindowsAppTheme.Select(_themePreference.Preference);
         _requests = new(_sourcePreference.Source);
         _connectionDiagnostics = new(_requests);
@@ -141,6 +149,10 @@ internal sealed class TrayContext : ApplicationContext
         _menu.Items.Add(_themeWarning);
         _menu.Items.Add(_startup);
         _menu.Items.Add(_startupWarning);
+        _autoResetItem.Click += (_, _) => ToggleAutoReset();
+        _autoResetStatus.Click += (_, _) => ShowConnectionDiagnostics();
+        _menu.Items.Add(_autoResetItem);
+        _menu.Items.Add(_autoResetStatus);
         _menu.Items.Add(new ToolStripSeparator());
         var diagnostics = new ToolStripMenuItem("查看连接诊断…");
         diagnostics.Click += (_, _) => ShowConnectionDiagnostics();
@@ -177,10 +189,19 @@ internal sealed class TrayContext : ApplicationContext
         {
             _clock.Stop(); // One-shot wake: no idle 1 Hz repaint/poll loop.
             Render();
-            BeginRefresh(RefreshTrigger.Automatic);
+            // Keep the planned deadline until a read starts, including a cooldown crossing.
+            var cardDue = _autoResetSchedule.IsDue(_autoReset.Enabled, DateTimeOffset.UtcNow);
+            BeginRefresh(cardDue ? RefreshTrigger.Manual : RefreshTrigger.Automatic);
             if (!_refreshPolicy.InFlight) ScheduleNextWake();
         };
         _tray.EnvironmentChanged += (_, _) => { ApplyTheme(); _hoverState = null; Render(); if (!_refreshPolicy.InFlight) ScheduleNextWake(); };
+        _tray.ClockOrResumeChanged += (_, _) =>
+        {
+            // Resume and clock changes require fresh backend eligibility, never a cached redemption.
+            // Theme, DPI and general settings messages do not create extra quota reads.
+            BeginRefresh();
+            if (!_refreshPolicy.InFlight) ScheduleNextWake();
+        };
         _animationTimer.Tick += (_, _) => Render();
         _speedTimer.Tick += (_, _) =>
         {
@@ -332,6 +353,7 @@ internal sealed class TrayContext : ApplicationContext
         _sourceRouter = new(source);
         _activeSource = null;
         _quotaSource = null;
+        _autoResetSchedule.Reset();
         _winnerInvalidated = false;
         _clock.Stop();
         StopAnimation();
@@ -353,6 +375,7 @@ internal sealed class TrayContext : ApplicationContext
         if (_exiting || _cleanup.RefreshPaused || _requests.ReadsBlocked || _requests.SwitchPending || !_refreshPolicy.CanRequest(DateTimeOffset.UtcNow) ||
             !_requests.TryBeginRead(out var read)) return;
         if (!_refreshPolicy.TryBegin(DateTimeOffset.UtcNow, trigger)) { read!.Dispose(); return; }
+        _autoResetSchedule.ReadStarted(DateTimeOffset.UtcNow);
         _connectionDiagnostics.Begin(read!, DateTimeOffset.UtcNow);
         _cleanup.BeginRead(read!);
         _clock.Stop();
@@ -394,13 +417,15 @@ internal sealed class TrayContext : ApplicationContext
         // Capture on the UI thread. Cleanup callbacks run on the backend worker and can
         // outlive this source selection, but never this read's ownership lifetime.
         var uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        var mutationSequence = _autoReset.MutationSequence;
         try
         {
             var read = await router.ReadAsync((source, token) =>
                 new CodexQuotaClient(source, source.CliOverridePath(_cliPath),
                     diagnostic => Record(request, diagnostic), diagnostic => Record(request, diagnostic),
                     cleanupProgress: progress => uiContext.Post(_ => ObserveCleanup(request, progress), null),
-                    cleanupStop: _stop.Token).ReadAsync(token),
+                    // Once this round sends a mutation, all retry/fallback sessions are read-only.
+                    cleanupStop: _stop.Token, autoReset: _autoReset.MutationSequence == mutationSequence ? _autoReset : null).ReadAsync(token),
                 request.Token, diagnostic => Record(request, diagnostic));
             request.TryApply(() =>
             {
@@ -528,6 +553,28 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
+    private string AutoResetStatusText => _autoReset.Enabled ? _autoReset.StatusText : "已关闭";
+
+    private void ToggleAutoReset()
+    {
+        if (_exiting) return;
+        var enable = !_autoReset.Enabled;
+        if (enable && MessageBox.Show(
+            "开启后，将在免费获得的重置卡到期前 1 分钟，按服务端当前资格自动尝试使用。\n" +
+            "不会购买付费额度或重置卡；离线、休眠、限流或资格不符时可能无法使用。\n是否开启？",
+            "自动使用免费重置卡", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        // Disable the thread-safe switch before disk I/O, even when persistence fails.
+        if (!enable) _autoReset.Enabled = false;
+        _autoResetPreference = _autoResetPreferences.Save(enable);
+        // Opt-in is effective only after an atomic durable save succeeds.
+        if (enable && _autoResetPreference.Status == AutoResetPreferenceStatus.Saved) _autoReset.Enabled = true;
+        _autoResetSchedule.Reset();
+        Render();
+        if (_autoReset.Enabled) BeginRefresh();
+        if (!_refreshPolicy.InFlight) ScheduleNextWake();
+    }
+
     private void SelectTheme(ThemePreference preference)
     {
         if (_exiting) return;
@@ -590,6 +637,14 @@ internal sealed class TrayContext : ApplicationContext
                 modelMetadataStatus: speedResult.ModelMetadataStatus);
             if (speedView != _speedView) { _speedView = speedView; _hoverState = null; }
         }
+        _autoResetItem.Checked = _autoReset.Enabled;
+        _autoResetItem.ToolTipText = AutoResetStatusText + "\n" + _autoResetPreference.Explanation +
+            "\n仅自动尝试免费获得且即将到期的重置卡；最终资格由服务端决定，不购买付费额度。";
+        _autoResetItem.AccessibleDescription = _autoResetItem.ToolTipText;
+        _autoResetStatus.Text = _autoResetPreference.Status == AutoResetPreferenceStatus.SaveFailed
+            ? (_autoResetPreference.Enabled ? "开启未保存，自动使用仍关闭…" : "本次已关闭，重启可能重新开启…")
+            : _autoResetPreference.IsWarning ? "自动使用已关闭，设置有提示…" : "自动重置卡：" + AutoResetStatusText;
+        _autoResetStatus.ToolTipText = _autoResetItem.ToolTipText;
         var stale = _state.IsStale(now);
         var percent = _state.Quota?.DisplayPercent;
         var switching = _requests.SwitchPending;
@@ -694,6 +749,8 @@ internal sealed class TrayContext : ApplicationContext
         var text = $"CodexQuotaTray {version}\r\n" +
             $"设置状态：{_sourcePreference.Explanation}\r\n已保存来源：{_sourcePreference.PersistedSourceDescription}\r\n{_sourcePreference.ToSafeLogCode()}\r\n" +
             "主题设置：" + _themePreference.Explanation + "\r\n" + _themePreference.ToSafeLogCode() + "\r\n" +
+            "自动使用免费重置卡：" + AutoResetStatusText + "\r\n" + _autoResetPreference.Explanation + "\r\n" +
+            _autoResetPreference.ToSafeLogCode() + "\r\n" +
             _visibilityDiagnostic + "\r\n" + _visibilityExplanation + "\r\n" +
             SourceReadDiagnosticText.Format(snapshot) +
             "\r\n\r\n" + ResetFeedDiagnosticText.Format(resetSnapshot, _resetPresentation, DateTimeOffset.UtcNow) +
@@ -726,6 +783,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         if (_exiting) return;
         _exiting = true;
+        _autoReset.Enabled = false;
         _updates.Dispose();
         _clock.Stop();
         _speedTimer.Stop();
@@ -748,6 +806,7 @@ internal sealed class TrayContext : ApplicationContext
         if (disposing)
         {
             _exiting = true;
+            _autoReset.Enabled = false;
             _updates.Dispose();
             _requests.Dispose();
             _stop.Cancel();
@@ -773,10 +832,13 @@ internal sealed class TrayContext : ApplicationContext
 
     private void ScheduleNextWake()
     {
-        if (_cleanup.RefreshPaused || _requests.ReadsBlocked) { _clock.Stop(); return; }
-        if (_exiting || _requests.SwitchPending || _refreshPolicy.InFlight) return;
+        if (_exiting) return;
         var now = DateTimeOffset.UtcNow;
-        var due = _refreshPolicy.NextAutomaticRefresh;
+        _autoResetSchedule.Observe(_autoReset.Enabled, _autoReset.NextDue(_state.ResetCards, now));
+        var wake = _autoResetSchedule.NextWake(_refreshPolicy,
+            _cleanup.RefreshPaused || _requests.ReadsBlocked || _requests.SwitchPending);
+        if (wake is null) { _clock.Stop(); return; }
+        var due = wake.Value;
         if (HoverCardModel.NextChange(_state, now) is { } change && change < due) due = change;
         var delay = Math.Max(100, Math.Min(int.MaxValue, Math.Ceiling((due - now).TotalMilliseconds)));
         _clock.Interval = (int)delay;

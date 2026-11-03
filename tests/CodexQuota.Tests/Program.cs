@@ -15,6 +15,9 @@ if (args.Length == 1 && args[0] == "--read") return await FakeReadOnlyQuotaReade
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Action body) => tests.Add((name, () => { body(); return Task.CompletedTask; }));
 void AsyncTest(string name, Func<Task> body) => tests.Add((name, body));
+AutoResetPreferenceTests.Register(Test);
+AutoResetWakeScheduleTests.Register(Test);
+AutoResetSourceIntegrationTests.Register(AsyncTest);
 UpdateCheckScheduleTests.Register(Test);
 UpdateManifestTests.Register(Test);
 UpdateDownloadTests.Register(Test, AsyncTest);
@@ -682,6 +685,7 @@ QuotaRingColorTests.Register(Test);
 PlanQuotaTests.Register(Test, AsyncTest);
 MinimalTooltipTests.Register(Test);
 ResetCardTests.Register(Test, AsyncTest);
+AutoResetCreditTests.Register(Test, AsyncTest);
 TrayHoverTests.Register(Test);
 HoverCardTests.Register(Test);
 CompactHoverPresentationTests.Register(Test);

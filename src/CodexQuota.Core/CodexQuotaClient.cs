@@ -8,6 +8,7 @@ namespace CodexQuota.Core;
 public sealed class CodexQuotaClient
 {
     private readonly QuotaDataSource _source;
+    private readonly AutoResetCreditController? _autoReset;
     private readonly Func<CancellationToken, SourceBackendDiscovery> _discover;
     private readonly Action<CliDiagnostic>? _diagnostic;
     private readonly Action<SourceBackendDiagnostic>? _trace;
@@ -22,9 +23,10 @@ public sealed class CodexQuotaClient
 
     public CodexQuotaClient(QuotaDataSource source, string? cliPath = null,
         Action<CliDiagnostic>? diagnostic = null, Action<SourceBackendDiagnostic>? trace = null,
-        Action<BackendCleanupProgress>? cleanupProgress = null, CancellationToken cleanupStop = default)
+        Action<BackendCleanupProgress>? cleanupProgress = null, CancellationToken cleanupStop = default,
+        AutoResetCreditController? autoReset = null)
         : this(source, token => CliLocator.Discover(source, cliPath, token), diagnostic, trace,
-            cleanupProgress: cleanupProgress, cleanupStop: cleanupStop) { }
+            cleanupProgress: cleanupProgress, cleanupStop: cleanupStop, autoReset: autoReset) { }
 
     internal CodexQuotaClient(Func<IEnumerable<CliCandidate>> candidates, Action<CliDiagnostic>? diagnostic = null,
         TimeSpan? sessionTimeout = null)
@@ -49,10 +51,11 @@ public sealed class CodexQuotaClient
         Action<CliDiagnostic>? diagnostic, Action<SourceBackendDiagnostic>? trace,
         TimeSpan? sessionTimeout = null, Func<ProcessStartInfo, IOwnedQuotaProcess>? processFactory = null,
         Action<BackendCleanupProgress>? cleanupProgress = null, CancellationToken cleanupStop = default,
-        BackendCleanupOptions? cleanupOptions = null)
+        BackendCleanupOptions? cleanupOptions = null, AutoResetCreditController? autoReset = null)
     {
         CliLocator.ValidateSource(source);
         _source = source;
+        _autoReset = autoReset;
         _discover = discover;
         _diagnostic = diagnostic;
         _trace = trace;
@@ -230,7 +233,7 @@ public sealed class CodexQuotaClient
                         Trace(SourceBackendStage.Initialize, SourceBackendOutcome.Succeeded, ReadStatus.Connecting);
                     stage = currentStage;
                     stageWatch.Restart();
-                }).ConfigureAwait(false);
+                }, _autoReset).ConfigureAwait(false);
             return Complete(result);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)

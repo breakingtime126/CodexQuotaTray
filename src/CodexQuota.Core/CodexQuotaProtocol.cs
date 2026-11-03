@@ -6,7 +6,7 @@ public static class CodexQuotaProtocol
         => await ReadAsync(rpc, requestTimeout, token, null).ConfigureAwait(false);
 
     internal static async Task<QuotaRead> ReadAsync(JsonRpcConnection rpc, TimeSpan requestTimeout, CancellationToken token,
-        Action<CliStage, Version?>? progress)
+        Action<CliStage, Version?>? progress, AutoResetCreditController? autoReset = null)
     {
         progress?.Invoke(CliStage.Initialize, null);
         var initialize = await rpc.RequestAsync("initialize", new
@@ -21,10 +21,12 @@ public static class CodexQuotaProtocol
         // The quota snapshot itself owns the plan; an absent plan remains unknown.
         progress?.Invoke(CliStage.RateLimitsRead, version);
         var result = await rpc.RequestAsync("account/rateLimits/read", new { }, requestTimeout, token).ConfigureAwait(false);
+        if (autoReset is not null)
+            result = await autoReset.ProcessAsync(rpc, result, requestTimeout, token).ConfigureAwait(false);
         var selection = QuotaParser.ReadSelection(result);
         if (!selection.IsValid) return new(ReadStatus.ProtocolError, Selection: selection);
-        // Detailed reset credits are included by default. Do not opt out of details and do
-        // not call the separate consume method: this tool only reads quota and expiry dates.
+        // Detailed credits are included by default. Mutations exist only in the explicitly
+        // enabled controller, which returns an authoritative post-operation snapshot.
         return new(selection.Active is null ? ReadStatus.NoQuotaWindow : ReadStatus.Ready, selection.Active, selection,
             ResetCards.Parse(result));
     }
