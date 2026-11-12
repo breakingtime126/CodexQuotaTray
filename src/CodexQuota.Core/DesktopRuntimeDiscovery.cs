@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 namespace CodexQuota.Core;
 
 internal sealed record DesktopPackageRegistration(string FullName, string Root);
-internal sealed record DesktopImageIdentity(long Length, string Sha256, Version? FileVersion, bool TrustedOpenAiSignature);
+internal sealed record DesktopImageIdentity(long Length, Version? FileVersion, bool TrustedOpenAiSignature);
 internal interface IDesktopImageLease : IDisposable
 {
     string Path { get; }
@@ -66,7 +66,7 @@ internal static class DesktopRuntimeDiscovery
                     using var runtime = evidence.OpenImage(path, anchorIdentity);
                     ValidateMatch(anchorIdentity, runtime.Identity);
                     return Candidate(path, SourceBackendLocation.DesktopExistingRuntime,
-                        SourceBackendIdentityEvidence.RegisteredPackageBytesAndSignature);
+                        SourceBackendIdentityEvidence.RegisteredPackageVersionAndSignature);
                 }
                 catch (DesktopRuntimeValidationException error)
                 {
@@ -148,7 +148,7 @@ internal static class DesktopRuntimeDiscovery
 
             void ConfirmCurrentRegistration()
             {
-                // Hashing and local trust checks can overlap an AppX update. Recheck after
+                // Local trust checks can overlap an AppX update. Recheck after
                 // expensive validation while both images remain pinned. Registration and
                 // CreateProcess are separate OS operations, so this is not an atomic lock.
                 var latest = evidence.RegisteredPackages().Take(64).FirstOrDefault();
@@ -220,8 +220,7 @@ internal static class DesktopRuntimeDiscovery
 
     private static void ValidateImage(DesktopImageIdentity identity)
     {
-        if (identity.Length <= 0 || identity.Length > MaximumImageBytes || identity.Sha256.Length != 64 ||
-            identity.Sha256.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+        if (identity.Length <= 0 || identity.Length > MaximumImageBytes)
             throw Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
         if (!identity.TrustedOpenAiSignature) throw Reject(SourceBackendExclusion.DesktopSignatureUnverified);
     }
@@ -229,7 +228,9 @@ internal static class DesktopRuntimeDiscovery
     private static void ValidateMatch(DesktopImageIdentity anchor, DesktopImageIdentity runtime)
     {
         ValidateImage(runtime);
-        if (anchor.Length != runtime.Length || !string.Equals(anchor.Sha256, runtime.Sha256, StringComparison.Ordinal))
+        // Deliberately no whole-image hash or byte-equality claim. Both images must still
+        // have a trusted OpenAI signature, matching size and matching available PE version.
+        if (anchor.Length != runtime.Length)
             throw Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
         // The Desktop MSIX version and bundled CLI version are different version domains.
         // Compare PE metadata only with the package resource, never the MSIX version.

@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using CodexQuota.Core;
 using Microsoft.Win32.SafeHandles;
 
@@ -7,88 +6,56 @@ internal static class DesktopEvidenceBudgetTests
     private const DesktopEvidenceLocation Runtime = DesktopEvidenceLocation.RuntimeImage;
     public static void Register(Action<string, Action> test)
     {
-        test("Desktop hash: production provider hashes full 1 MiB chunks and trailing bytes", () =>
-        {
-            var bytes = new byte[DesktopImageHasher.BufferBytes * 2 + 179];
-            new Random(723).NextBytes(bytes);
-            using var stream = new TimedStream(bytes, new Clock());
-            var actual = DesktopImageHasher.Compute(stream, new DesktopEvidenceBudget(), Runtime);
-            Check.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), actual);
-            Check.Equal(DesktopHashProvider.PlatformDefault, DesktopImageHasher.Provider);
-            Check.True(stream.Requests.All(size => size == 1024 * 1024));
-            Check.Equal(4, stream.Requests.Count); // two full chunks, tail, EOF
-        });
-        test("Desktop hash: earlier signature and scan work does not consume hash time", () =>
+        test("Desktop budget: launch phase does not restart the overall deadline", () =>
         {
             var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
             budget.BeginPhase();
-            DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify, Runtime,
-                () => clock.Advance(12100), budget);
-            using var stream = new TimedStream(new byte[65536], clock, readMilliseconds: 0.6);
-            Check.Equal(64, DesktopImageHasher.Compute(stream, budget, Runtime).Length);
-            var detail = budget.Limit(DesktopEvidenceLimit.DirectoryCount,
-                DesktopEvidenceStep.DirectoryEnumeration, Runtime).Desktop!;
-            Check.Equal(0L, detail.HashMilliseconds); // 0.6 ms, rounded down only for display
-            Check.Equal(12100L, detail.PhaseMilliseconds);
-            Check.Equal(65536L, detail.HashBytes);
-        });
-        test("Desktop hash: hash time is cumulative across images in one phase", () =>
-        {
-            var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
-            budget.BeginPhase();
-            using var first = new TimedStream(new byte[16], clock, readMilliseconds: 9000);
-            DesktopImageHasher.Compute(first, budget, DesktopEvidenceLocation.PackageImage);
-            using var second = new TimedStream(new byte[16], clock, readMilliseconds: 3001);
-            var error = Failure(() => DesktopImageHasher.Compute(second, budget, Runtime));
-            AssertLimit(error, DesktopEvidenceLimit.HashTime, DesktopEvidenceStep.ImageHash);
-            Check.Equal(12001L, error.Desktop!.HashMilliseconds);
-            Check.Equal(32L, error.Desktop.HashBytes);
-            Check.Equal(16L, error.Desktop.ImageBytes);
-            Check.Equal(1, second.Requests.Count);
-            Check.Null(error.Code);
-        });
-        foreach (var stage in new[] { "transform", "final", "eof" })
-            test("Desktop hash: budget includes " + stage + " and checks immediately afterward", () =>
-            {
-                var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
-                budget.BeginPhase();
-                using var stream = new TimedStream(new byte[17], clock,
-                    eofMilliseconds: stage == "eof" ? 12000 : 0);
-                var hash = new TimedHash(clock, stage == "transform" ? 12000 : 0, stage == "final" ? 12000 : 0);
-                var error = Failure(() => DesktopImageHasher.Compute(stream, budget, Runtime, () => hash));
-                AssertLimit(error, DesktopEvidenceLimit.HashTime, DesktopEvidenceStep.ImageHash);
-                Check.Equal(12000L, error.Desktop!.HashMilliseconds);
-                Check.True(hash.Disposed);
-                Check.Equal(stage == "transform" ? 1 : 2, stream.Requests.Count);
-            });
-        test("Desktop hash: registration confirmation does not clear phase totals", () =>
-        {
-            var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
-            var evidence = new WindowsDesktopRuntimeEvidence(registeredPackages: () => Array.Empty<DesktopPackageRegistration>(), budget: budget);
-            evidence.BeginEvidencePhase();
-            using var first = new TimedStream(new byte[5], clock, readMilliseconds: 9000);
-            DesktopImageHasher.Compute(first, budget, Runtime);
-            Check.Equal(0, evidence.RegisteredPackages().Count());
-            using var second = new TimedStream(new byte[5], clock, readMilliseconds: 4000);
-            var error = Failure(() => DesktopImageHasher.Compute(second, budget, Runtime));
-            Check.Equal(13000L, error.Desktop!.HashMilliseconds);
-            AssertLimit(error, DesktopEvidenceLimit.HashTime, DesktopEvidenceStep.ImageHash);
-        });
-        test("Desktop budget: explicit launch phase resets hash time but never lifetime", () =>
-        {
-            var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
-            budget.BeginPhase();
-            using var first = new TimedStream(new byte[5], clock, readMilliseconds: 9000);
-            DesktopImageHasher.Compute(first, budget, Runtime);
-            clock.Advance(11000);
-            budget.BeginPhase();
-            using var second = new TimedStream(new byte[5], clock, readMilliseconds: 4000);
-            DesktopImageHasher.Compute(second, budget, Runtime);
-            clock.Advance(16000);
+            budget.CheckImageSize(4096, Runtime);
+            clock.Advance(20000); budget.BeginPhase();
+            budget.CheckImageSize(8192, Runtime);
+            clock.Advance(20000);
             var error = Failure(budget.BeginPhase);
             AssertLimit(error, DesktopEvidenceLimit.VerificationTime, DesktopEvidenceStep.PackageFamilyQuery);
             Check.Equal(40000L, error.Desktop!.VerificationMilliseconds);
-            Check.Equal(4000L, error.Desktop.HashMilliseconds);
+            Check.Equal(20000L, error.Desktop.PhaseMilliseconds);
+            Check.Equal(0L, error.Desktop.HashBytes);
+            Check.Equal(0L, error.Desktop.HashMilliseconds);
+            Check.Equal(DesktopHashProvider.None, error.Desktop.HashProvider);
+        });
+        test("Desktop budget: every image records its size without a cumulative hash budget", () =>
+        {
+            var budget = new DesktopEvidenceBudget();
+            for (var index = 0; index < 8; index++)
+                budget.CheckImageSize(DesktopRuntimeDiscovery.MaximumImageBytes, Runtime);
+            var detail = budget.Limit(DesktopEvidenceLimit.DirectoryCount,
+                DesktopEvidenceStep.DirectoryEnumeration, Runtime).Desktop!;
+            Check.Equal(DesktopRuntimeDiscovery.MaximumImageBytes, detail.ImageBytes);
+            Check.Equal(0L, detail.HashBytes);
+            Check.Equal(0L, detail.HashMilliseconds);
+            Check.Equal(DesktopHashProvider.None, detail.HashProvider);
+        });
+        test("Desktop budget: image size limit remains before signature verification", () =>
+        {
+            var budget = new DesktopEvidenceBudget();
+            var error = Failure(() => budget.CheckImageSize(DesktopRuntimeDiscovery.MaximumImageBytes + 1, Runtime));
+            AssertLimit(error, DesktopEvidenceLimit.ImageBytes, DesktopEvidenceStep.ImageRead);
+            Check.Equal(DesktopRuntimeDiscovery.MaximumImageBytes + 1, error.Desktop!.ImageBytes);
+            Check.Equal(0L, error.Desktop.HashBytes);
+            foreach (var length in new long[] { 0, -1 })
+                Check.Equal(SourceBackendExclusion.DesktopRuntimeUnverified,
+                    Failure(() => budget.CheckImageSize(length, Runtime)).Exclusion);
+        });
+        test("Desktop budget: decoration clears legacy hash activity rather than copying it", () =>
+        {
+            var budget = new DesktopEvidenceBudget(); budget.CheckImageSize(8192, Runtime);
+            var old = new DesktopRuntimeValidationException(SourceBackendExclusion.Inaccessible,
+                desktop: new(DesktopEvidenceStep.VersionRead, Runtime)
+                { HashBytes = 123456, HashMilliseconds = 12, HashProvider = DesktopHashProvider.WindowsCng });
+            var detail = budget.Decorate(old).Desktop!;
+            Check.Equal(8192L, detail.ImageBytes);
+            Check.Equal(0L, detail.HashBytes);
+            Check.Equal(0L, detail.HashMilliseconds);
+            Check.Equal(DesktopHashProvider.None, detail.HashProvider);
         });
         test("Desktop budget: lazily enumerated package work is inside overall deadline", () =>
         {
@@ -145,37 +112,6 @@ internal static class DesktopEvidenceBudgetTests
             }
             finally { foreach (var guard in guards) guard.Dispose(); }
         });
-        test("Desktop hash: image and total byte limits have distinct closed diagnostics", () =>
-        {
-            var budget = new DesktopEvidenceBudget();
-            using var oversized = new DeclaredLengthStream(DesktopRuntimeDiscovery.MaximumImageBytes + 1);
-            var image = Failure(() => DesktopImageHasher.Compute(oversized, budget, Runtime));
-            AssertLimit(image, DesktopEvidenceLimit.ImageBytes, DesktopEvidenceStep.ImageHash);
-            Check.Equal(DesktopRuntimeDiscovery.MaximumImageBytes + 1, image.Desktop!.ImageBytes);
-            Check.Equal(0L, image.Desktop.HashBytes);
-            budget.BeginPhase();
-            for (var index = 0; index < 4; index++) budget.ReserveImage(DesktopRuntimeDiscovery.MaximumImageBytes, Runtime);
-            var total = Failure(() => budget.ReserveImage(1, Runtime));
-            AssertLimit(total, DesktopEvidenceLimit.TotalHashBytes, DesktopEvidenceStep.ImageHash);
-            budget.BeginPhase();
-            budget.ReserveImage(DesktopRuntimeDiscovery.MaximumImageBytes, Runtime);
-        });
-        foreach (var stage in new[] { "factory", "read", "transform", "final" })
-            test("Desktop hash: " + stage + " failure preserves exact read-failure provenance", () =>
-            {
-                var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
-                using var stream = new TimedStream(new byte[9], clock, failRead: stage == "read");
-                var hash = new TimedHash(clock, failAt: stage);
-                var error = Failure(() => DesktopImageHasher.Compute(stream, budget, Runtime,
-                    () => stage == "factory" ? throw new CryptographicException("private factory") : hash));
-                Check.Equal(stage == "factory" ? DesktopEvidenceStep.HashProviderCreate : DesktopEvidenceStep.ImageHash,
-                    error.Desktop!.Step);
-                Check.Equal(Runtime, error.Desktop.Location);
-                Check.True(error.EvidenceReadFailure);
-                Check.Equal(DesktopEvidenceLimit.None, error.Desktop.Limit);
-                Check.False(error.Desktop.FormatSafe().Contains("private", StringComparison.Ordinal));
-                Check.True(stage == "factory" || hash.Disposed);
-            });
         test("Desktop budget: native failure provenance wins if the failed operation crosses deadline", () =>
         {
             var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
@@ -231,46 +167,6 @@ internal static class DesktopEvidenceBudgetTests
         private TimeSpan _now;
         internal TimeSpan Read() => _now;
         internal void Advance(double milliseconds) => _now += TimeSpan.FromMilliseconds(milliseconds);
-    }
-    private sealed class TimedStream(byte[] bytes, Clock clock, double readMilliseconds = 0,
-        double eofMilliseconds = 0, bool failRead = false) : MemoryStream(bytes, writable: false)
-    {
-        internal List<int> Requests { get; } = new();
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            Requests.Add(count);
-            if (failRead) throw new IOException("private read");
-            var read = base.Read(buffer, offset, count);
-            clock.Advance(read == 0 ? eofMilliseconds : readMilliseconds);
-            return read;
-        }
-    }
-    private sealed class DeclaredLengthStream(long length) : MemoryStream
-    {
-        public override long Length => length;
-        public override int Read(byte[] buffer, int offset, int count) => throw new TestFailure("Oversized image must not be read.");
-    }
-    private sealed class TimedHash(Clock clock, double transformMilliseconds = 0, double finalMilliseconds = 0,
-        string? failAt = null) : HashAlgorithm
-    {
-        private readonly SHA256 _inner = SHA256.Create();
-        internal bool Disposed { get; private set; }
-        public override void Initialize() => _inner.Initialize();
-        protected override void HashCore(byte[] array, int ibStart, int cbSize)
-        {
-            clock.Advance(transformMilliseconds);
-            if (failAt == "transform") throw new CryptographicException("private transform");
-            _inner.TransformBlock(array, ibStart, cbSize, array, ibStart);
-        }
-        protected override byte[] HashFinal()
-        {
-            clock.Advance(finalMilliseconds);
-            if (failAt == "final") throw new CryptographicException("private final");
-            _inner.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-            return _inner.Hash!;
-        }
-        protected override void Dispose(bool disposing)
-        { Disposed = true; if (disposing) _inner.Dispose(); base.Dispose(disposing); }
     }
     private sealed class SlowOpenApi(Clock clock) : DesktopReadOnlyFileLease.IWindowsFileApi
     {

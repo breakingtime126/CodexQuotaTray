@@ -6,7 +6,8 @@ public enum SourceBackendStage { Discover, Start, Initialize, QuotaRead, Cleanup
 public enum SourceBackendOutcome { Succeeded, Failed, Cancelled, Pending }
 public enum SourceBackendLocation { None, CliExplicit, CliPath, CliNpm, DesktopPackageResource, VsCodeExtensionBinary, DesktopExistingRuntime }
 public enum SourceBackendComponent { None, CodexExecutable, CodexNpmEntry, DesktopBundledCodex, VsCodeBundledCodex }
-public enum SourceBackendIdentityEvidence { Unknown, RegisteredDesktopPackage, RegisteredPackageBytesAndSignature }
+// Append evidence kinds: persisted diagnostics may still contain the legacy byte-match value.
+public enum SourceBackendIdentityEvidence { Unknown, RegisteredDesktopPackage, RegisteredPackageBytesAndSignature, RegisteredPackageVersionAndSignature }
 public enum SourceBackendProcessEvidence { NotChecked, ObservedDesktopChild }
 public enum SourceBackendVersionEvidence { Unknown, InitializeResponse }
 public enum SourceBackendExit { NotStarted, Running, Exited, OwnedTreeTerminationRequested, Unknown }

@@ -707,6 +707,7 @@ SourceReadDiagnosticsTests.Register(Test, AsyncTest);
 DesktopNativeReadTests.Register(Test, AsyncTest);
 DesktopBudgetProtocolTests.Register(Test, AsyncTest);
 DesktopEvidenceBudgetTests.Register(Test);
+DesktopImageInspectionTests.Register(Test);
 AutoSourcePolicyTests.Register(Test, AsyncTest);
 TurnAverageTests.Register(Test, AsyncTest);
 RolloutPollScheduleTests.Register(Test);

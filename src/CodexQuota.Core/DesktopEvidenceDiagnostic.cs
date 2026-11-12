@@ -17,6 +17,7 @@ public enum DesktopEvidenceLocation
 }
 
 public enum DesktopEvidenceLimit { None, ImageBytes, TotalHashBytes, HashTime, VerificationTime, DirectoryCount }
+// Legacy hash diagnostics remain readable; the quota image path now reports None and zero hash work.
 public enum DesktopHashProvider { None, WindowsCng, PlatformDefault }
 
 /// <summary>No paths, account data, exception messages, or other arbitrary strings.</summary>
