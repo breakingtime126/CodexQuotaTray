@@ -59,8 +59,10 @@ internal static class Tests
             TrayVisibilityAbiSmoke.Run(Check);
             Check(typeof(QuotaState).Assembly.GetType("CodexQuota.Core.DesktopImageHasher") is null,
                 "Desktop quota path has no standalone whole-image hash implementation");
-            Check(Enum.IsDefined(typeof(SourceBackendIdentityEvidence), "RegisteredPackageVersionAndSignature"),
-                "Desktop diagnostics describe signature/version evidence without byte equality");
+            Check(typeof(QuotaState).Assembly.GetType("CodexQuota.Core.WindowsDesktopSignature") is null,
+                "Desktop quota path has no active Authenticode implementation");
+            Check(Enum.IsDefined(typeof(SourceBackendIdentityEvidence), "RegisteredPackageMetadata"),
+                "Desktop diagnostics describe package metadata without claiming signature verification");
             // Exercise the exact production Windows identity boundary. Construction only:
             // no Enter, no StartServer, no mutex acquisition, no tray, registry or real CLI.
             using (var identity = WindowsIdentity.GetCurrent())

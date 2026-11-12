@@ -34,7 +34,7 @@ internal static class DesktopEvidenceBudgetTests
             Check.Equal(0L, detail.HashMilliseconds);
             Check.Equal(DesktopHashProvider.None, detail.HashProvider);
         });
-        test("Desktop budget: image size limit remains before signature verification", () =>
+        test("Desktop budget: image size limit remains before metadata validation", () =>
         {
             var budget = new DesktopEvidenceBudget();
             var error = Failure(() => budget.CheckImageSize(DesktopRuntimeDiscovery.MaximumImageBytes + 1, Runtime));
@@ -74,16 +74,16 @@ internal static class DesktopEvidenceBudgetTests
             AssertLimit(error, DesktopEvidenceLimit.VerificationTime, DesktopEvidenceStep.PackageFamilyQuery);
             Check.Equal(1, moves);
         });
-        test("Desktop budget: final signature stage crossing deadline rejects before next stage", () =>
+        test("Desktop budget: image metadata stage crossing deadline rejects before version read", () =>
         {
             var clock = new Clock(); var budget = new DesktopEvidenceBudget(clock.Read);
             var versionReads = 0;
             var error = Failure(() =>
             {
-                DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify, Runtime, () => clock.Advance(40001), budget);
+                DesktopEvidenceOperation.Run(DesktopEvidenceStep.ImageRead, Runtime, () => clock.Advance(40001), budget);
                 DesktopEvidenceOperation.Run(DesktopEvidenceStep.VersionRead, Runtime, () => versionReads++, budget);
             });
-            AssertLimit(error, DesktopEvidenceLimit.VerificationTime, DesktopEvidenceStep.SignatureVerify);
+            AssertLimit(error, DesktopEvidenceLimit.VerificationTime, DesktopEvidenceStep.ImageRead);
             Check.Equal(0, versionReads);
         });
         test("Desktop budget: shared cancellation blocks next operation without throwing cancellation", () =>
@@ -92,9 +92,9 @@ internal static class DesktopEvidenceBudgetTests
             var budget = new DesktopEvidenceBudget(cancellationToken: cancel.Token);
             budget.BeginPhase(); cancel.Cancel();
             var called = false;
-            var error = Failure(() => DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify,
+            var error = Failure(() => DesktopEvidenceOperation.Run(DesktopEvidenceStep.ImageRead,
                 Runtime, () => called = true, budget));
-            AssertLimit(error, DesktopEvidenceLimit.VerificationTime, DesktopEvidenceStep.SignatureVerify);
+            AssertLimit(error, DesktopEvidenceLimit.VerificationTime, DesktopEvidenceStep.ImageRead);
             Check.False(called);
         });
         test("Desktop budget: completed native open crossing deadline closes returned handle", () =>

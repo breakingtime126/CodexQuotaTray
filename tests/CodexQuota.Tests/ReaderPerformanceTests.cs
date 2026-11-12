@@ -9,6 +9,82 @@ static class ReaderPerformanceTests
 
     public static void Register(Action<string, Action> test, Action<string, Func<Task>> asyncTest)
     {
+        asyncTest("reader discovery: default interval skips rescans but keeps tracked appends current", async () =>
+        {
+            using var home = new Home();
+            var path = home.Write(Owner, Header(Owner) + Turn(Owner, "first", 0));
+            using var reader = new RolloutSpeedReader(home.Path);
+            var before = DateTimeOffset.UtcNow;
+            var first = await reader.PollAsync();
+            var after = DateTimeOffset.UtcNow;
+            var due = DiscoveryDeadline(reader);
+            Check.True(due >= before.AddSeconds(15) && due <= after.AddSeconds(15));
+            Check.True(first.DiscoveryEntriesVisited > 0);
+            const string other = "22222222-2222-4222-8222-222222222222";
+            home.Write(other, Header(other) + Turn(other, "new-session", 50));
+            File.AppendAllText(path, Turn(Owner, "tracked-append", 20));
+            // Hold the discovery deadline in the future; content polling must be independent.
+            SetDiscoveryDeadline(reader, DateTimeOffset.MaxValue);
+            var appended = await reader.PollAsync();
+            Check.Equal("tracked-append", appended.Sample!.ResponseId);
+            Check.Equal(1, appended.TrackedFileCount);
+            Check.Equal(0, appended.DiscoveryEntriesVisited);
+            Check.Equal(0, appended.DiscoveryDirectoriesVisited);
+            Check.False(appended.CanCatchUp);
+            for (var i = 0; i < 4; i++)
+            {
+                var idle = await reader.PollAsync();
+                Check.Equal(0, idle.DiscoveryEntriesVisited);
+                Check.Equal("tracked-append", idle.Sample!.ResponseId);
+            }
+            SetDiscoveryDeadline(reader, DateTimeOffset.MinValue);
+            var discoveryStarted = DateTimeOffset.UtcNow;
+            var discovered = await reader.PollAsync();
+            Check.True(discovered.DiscoveryEntriesVisited > 0);
+            Check.Equal(2, discovered.TrackedFileCount);
+            Check.Equal("new-session", discovered.Sample!.ResponseId);
+            Check.True(DiscoveryDeadline(reader) >= discoveryStarted.AddSeconds(15));
+        });
+
+        asyncTest("reader discovery: unfinished traversal ignores the slower fresh-scan deadline", async () =>
+        {
+            using var home = new Home();
+            for (var i = 0; i < 8; i++)
+            {
+                var id = i.ToString("x8") + "-1111-4111-8111-111111111111";
+                home.Write(id, Header(id));
+            }
+            using var reader = new RolloutSpeedReader(home.Path, new() { MaxDiscoveryEntries = 2 });
+            var result = await reader.PollAsync();
+            Check.True(result.DiscoveryPending && result.CanCatchUp);
+            SetDiscoveryDeadline(reader, DateTimeOffset.MaxValue);
+            for (var i = 0; i < 20 && result.DiscoveryPending; i++)
+                result = await reader.PollAsync();
+            Check.False(result.DiscoveryPending);
+            Check.Equal(8, result.TrackedFileCount);
+            Check.True(DiscoveryDeadline(reader) < DateTimeOffset.MaxValue);
+        });
+
+        asyncTest("reader discovery: replacement sessions are found at the next discovery after a file disappears", async () =>
+        {
+            using var home = new Home();
+            var old = home.Write(Owner, Header(Owner) + Turn(Owner, "old", 0));
+            using var reader = new RolloutSpeedReader(home.Path);
+            await reader.PollAsync();
+            SetDiscoveryDeadline(reader, DateTimeOffset.MaxValue);
+            const string other = "22222222-2222-4222-8222-222222222222";
+            home.Write(other, Header(other) + Turn(other, "replacement-session", 20));
+            File.Delete(old);
+            var missing = await reader.PollAsync();
+            Check.Equal(0, missing.DiscoveryEntriesVisited);
+            // Some runtimes report missing FileInfo attributes without throwing.
+            // In both cases the next regular discovery must find the replacement.
+            SetDiscoveryDeadline(reader, DateTimeOffset.MinValue);
+            var found = await reader.PollAsync();
+            Check.True(found.DiscoveryEntriesVisited > 0);
+            Check.Equal("replacement-session", found.Sample!.ResponseId);
+        });
+
         asyncTest("reader idle: unchanged files only verify prefix and prior anchor", async () =>
         {
             using var home = new Home();
@@ -136,6 +212,12 @@ static class ReaderPerformanceTests
             VerifyTracked(reader, paths);
         });
     }
+
+    // Move only the discovery deadline to test scheduling without wall-clock sleeps.
+    private static System.Reflection.FieldInfo DiscoveryDeadlineField => typeof(RolloutSpeedReader)
+        .GetField("nextDiscovery", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+    private static DateTimeOffset DiscoveryDeadline(RolloutSpeedReader reader) => (DateTimeOffset)DiscoveryDeadlineField.GetValue(reader)!;
+    private static void SetDiscoveryDeadline(RolloutSpeedReader reader, DateTimeOffset value) => DiscoveryDeadlineField.SetValue(reader, value);
 
     private static void VerifyTracked(RolloutSpeedReader reader, IEnumerable<string> paths)
     {

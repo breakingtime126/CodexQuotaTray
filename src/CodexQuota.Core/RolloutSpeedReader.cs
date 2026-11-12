@@ -29,7 +29,8 @@ public sealed record RolloutSpeedReadResult(OutputSpeedSample? Sample, RolloutSp
 /// <summary>Limits cover metadata discovery as well as content reads. No history is persisted.</summary>
 public sealed class RolloutSpeedReaderOptions
 {
-    public TimeSpan DiscoveryInterval { get; init; } = TimeSpan.FromSeconds(3);
+    // Discover new files less frequently; already tracked files still poll every three seconds.
+    public TimeSpan DiscoveryInterval { get; init; } = TimeSpan.FromSeconds(15);
     public int MaxTrackedFiles { get; init; } = 24;
     public int MaxDiscoveryEntries { get; init; } = 4096;
     public int MaxDiscoveryDirectories { get; init; } = 128;

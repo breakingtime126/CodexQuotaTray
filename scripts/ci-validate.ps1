@@ -5,8 +5,8 @@ if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[
 if ([string]$props.Project.PropertyGroup.AssemblyVersion -ne $version) { throw 'AssemblyVersion mismatch' }
 if ($env:GITHUB_EVENT_NAME -eq 'push') {
   $isVersionTag = $env:GITHUB_REF -eq "refs/tags/v$version"
-  $isApprovedReleaseBranch = $env:GITHUB_REF -eq 'refs/heads/release/0.2.40' -and $version -eq '0.2.40.0' -and [string]$props.Project.PropertyGroup.Version -eq '0.2.40'
-  if (-not ($isVersionTag -or $isApprovedReleaseBranch)) { throw 'Push must be the matching version tag or the fixed 0.2.40 release branch' }
+  $isApprovedReleaseBranch = $env:GITHUB_REF -eq 'refs/heads/release/0.2.41' -and $version -eq '0.2.41.0' -and [string]$props.Project.PropertyGroup.Version -eq '0.2.41'
+  if (-not ($isVersionTag -or $isApprovedReleaseBranch)) { throw 'Push must be the matching version tag or the fixed 0.2.41 release branch' }
 } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
   if ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:REQUESTED_VERSION -ne $version) { throw 'Manual release must run main with its exact FileVersion' }
 } else { throw 'Unsupported event' }

@@ -8,8 +8,11 @@ static class ReaderCatchupTests
     private static readonly DateTimeOffset Epoch = new(2026, 10, 2, 10, 0, 0, TimeSpan.Zero);
     public static void Register(Action<string, Action> test, Action<string, Func<Task>> asyncTest)
     {
-        test("reader catchup: fresh discovery defaults to three seconds", () =>
-            Check.Equal(TimeSpan.FromSeconds(3), new RolloutSpeedReaderOptions().DiscoveryInterval));
+        test("reader catchup: discovery defaults to fifteen seconds without slowing tracked polling", () =>
+        {
+            Check.Equal(TimeSpan.FromSeconds(15), new RolloutSpeedReaderOptions().DiscoveryInterval);
+            Check.Equal(3000, new RolloutPollSchedule().NextDelay(false));
+        });
         asyncTest("reader catchup: persistent discovery reaches an active old date beyond 64 directories", async () =>
         {
             foreach (var targetIndex in new[] { 0, 89 })

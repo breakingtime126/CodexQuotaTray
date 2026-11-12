@@ -3,6 +3,7 @@ using System.Globalization;
 namespace CodexQuota.Core;
 
 // Closed labels only. These describe the actual failed operation, never a guessed cause.
+// ImageHash, SignatureVerify and HashProviderCreate are legacy persisted labels only.
 public enum DesktopEvidenceStep
 {
     None, PackageFamilyQuery, PackagePathQuery, PackageOriginQuery, PackageIdentityValidation,

@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Security.Cryptography;
 using CodexQuota.Core;
 
 internal static class DesktopRuntimeDiscoveryTests
@@ -14,7 +13,7 @@ internal static class DesktopRuntimeDiscoveryTests
             Check.Equal(evidence.Runtime, result.Candidate!.StartInfo.FileName);
             Check.Equal(CliSource.Desktop, result.Candidate.Source);
             Check.Equal(SourceBackendLocation.DesktopExistingRuntime, result.Candidate.Location);
-            Check.Equal(SourceBackendIdentityEvidence.RegisteredPackageVersionAndSignature, result.Candidate.IdentityEvidence);
+            Check.Equal(SourceBackendIdentityEvidence.RegisteredPackageMetadata, result.Candidate.IdentityEvidence);
             Check.True(result.Candidate.StartInfo.ArgumentList.SequenceEqual(new[] { "app-server" }));
             Check.False(result.Candidate.StartInfo.UseShellExecute);
             Check.Equal(0, evidence.ActiveLeases);
@@ -45,7 +44,7 @@ internal static class DesktopRuntimeDiscoveryTests
             using (result.Candidate.AcquireLaunchLease!()) Check.Equal(1, evidence.ActiveLeases);
             Check.Equal(0, evidence.ActiveLeases);
         });
-        test("Desktop runtime: missing PE version in both signed same-size images remains supported", () =>
+        test("Desktop runtime: missing PE version in both same-size images remains supported", () =>
         {
             using var evidence = new FakeEvidence();
             evidence.Anchor = evidence.Anchor with { FileVersion = null };
@@ -62,7 +61,6 @@ internal static class DesktopRuntimeDiscoveryTests
         foreach (var (name, transform, exclusion) in new (string, Func<DesktopImageIdentity, DesktopImageIdentity>, SourceBackendExclusion)[]
         {
             ("size mismatch", identity => identity with { Length = identity.Length + 1 }, SourceBackendExclusion.DesktopRuntimeUnverified),
-            ("untrusted signature", identity => identity with { TrustedOpenAiSignature = false }, SourceBackendExclusion.DesktopSignatureUnverified),
             ("PE mismatch", identity => identity with { FileVersion = new Version(9, 9, 9, 0) }, SourceBackendExclusion.DesktopVersionMismatch),
             ("one absent PE", identity => identity with { FileVersion = null }, SourceBackendExclusion.DesktopVersionMismatch),
             ("oversized image", identity => identity with { Length = DesktopRuntimeDiscovery.MaximumImageBytes + 1 }, SourceBackendExclusion.DesktopRuntimeUnverified),
@@ -76,13 +74,13 @@ internal static class DesktopRuntimeDiscoveryTests
                 Check.True((result.Exclusions & exclusion) != 0);
                 Check.Equal(0, evidence.ActiveLeases);
             });
-        test("Desktop runtime: an untrusted package anchor prevents runtime reads", () =>
+        test("Desktop runtime: an invalid package image size prevents runtime reads", () =>
         {
             using var evidence = new FakeEvidence();
-            evidence.Anchor = evidence.Anchor with { TrustedOpenAiSignature = false };
+            evidence.Anchor = evidence.Anchor with { Length = 0 };
             var result = DesktopRuntimeDiscovery.Discover(evidence);
             Check.Null(result.Candidate);
-            Check.Equal(SourceBackendExclusion.DesktopSignatureUnverified, result.Exclusions);
+            Check.Equal(SourceBackendExclusion.DesktopRuntimeUnverified, result.Exclusions);
             Check.Equal(0, evidence.RuntimeScans);
             Check.Equal(0, evidence.ActiveLeases);
         });
@@ -112,15 +110,15 @@ internal static class DesktopRuntimeDiscoveryTests
                 Check.True(result.Exclusions != SourceBackendExclusion.None);
                 Check.Equal(0, evidence.ActiveLeases);
             });
-        test("Desktop runtime: cache-only trust HRESULT is retained without certificate text", () =>
+        test("Desktop runtime: metadata validation HRESULT is retained without private text", () =>
         {
-            const int trustRevocationFailure = unchecked((int)0x800B010E);
+            const int metadataFailure = unchecked((int)0x8007000D);
             using var evidence = new FakeEvidence
-            { RuntimeOpenFailure = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopSignatureUnverified, trustRevocationFailure) };
+            { RuntimeOpenFailure = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopRuntimeUnverified, metadataFailure) };
             var result = DesktopRuntimeDiscovery.Discover(evidence);
             Check.Null(result.Candidate);
-            Check.Equal(trustRevocationFailure, result.Code);
-            Check.Equal(SourceBackendExclusion.DesktopSignatureUnverified, result.Exclusions);
+            Check.Equal(metadataFailure, result.Code);
+            Check.Equal(SourceBackendExclusion.DesktopRuntimeUnverified, result.Exclusions);
         });
         test("Desktop runtime: registration manifest mismatch fails before any image read", () =>
         {
@@ -137,11 +135,10 @@ internal static class DesktopRuntimeDiscoveryTests
                 using var evidence = new FakeEvidence();
                 var sibling = evidence.AddRuntime("0123456789abcdef");
                 evidence.RuntimePaths = [evidence.Runtime, sibling];
-                var first = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopSignatureUnverified,
-                    unchecked((int)0x800B0100), new(DesktopEvidenceStep.SignatureVerify,
-                        DesktopEvidenceLocation.RuntimeImage, unchecked((int)0x800B0100)));
+                var first = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopVersionMismatch,
+                    13, new(DesktopEvidenceStep.VersionRead, DesktopEvidenceLocation.RuntimeImage, 13));
                 var last = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopRuntimeUnverified, lastCode,
-                    new(DesktopEvidenceStep.ImageHash, DesktopEvidenceLocation.RuntimeImage, lastCode));
+                    new(DesktopEvidenceStep.ImageRead, DesktopEvidenceLocation.RuntimeImage, lastCode));
                 evidence.RuntimeFailures[evidence.Runtime] = first;
                 evidence.RuntimeFailures[sibling] = last;
                 var result = DesktopRuntimeDiscovery.Discover(evidence);
@@ -151,7 +148,7 @@ internal static class DesktopRuntimeDiscoveryTests
                 Check.Equal(last.Desktop, result.Desktop);
                 Check.Equal(lastCode, result.Desktop!.NativeCode);
                 Check.Null(result.Desktop.NtStatus);
-                Check.True((result.Exclusions & SourceBackendExclusion.DesktopSignatureUnverified) != 0);
+                Check.True((result.Exclusions & SourceBackendExclusion.DesktopVersionMismatch) != 0);
                 Check.True((result.Exclusions & SourceBackendExclusion.DesktopRuntimeUnverified) != 0);
             }
         });
@@ -177,13 +174,13 @@ internal static class DesktopRuntimeDiscoveryTests
                 Check.Equal(0, evidence.ActiveLeases);
             });
         foreach (var code in new[] { 5, unchecked((int)0x80070005) })
-            test("Desktop runtime: explicit signature access denial stops before a sibling " + code, () =>
+            test("Desktop runtime: explicit metadata access denial stops before a sibling " + code, () =>
             {
                 using var evidence = new FakeEvidence();
                 var sibling = evidence.AddRuntime("0123456789abcdef");
                 evidence.RuntimePaths = [evidence.Runtime, sibling];
-                var error = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopSignatureUnverified,
-                    code, new(DesktopEvidenceStep.SignatureVerify, DesktopEvidenceLocation.RuntimeImage, code));
+                var error = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopRuntimeUnverified,
+                    code, new(DesktopEvidenceStep.VersionRead, DesktopEvidenceLocation.RuntimeImage, code));
                 evidence.RuntimeFailures[evidence.Runtime] = error;
                 var opened = new List<string>(); evidence.OnImageOpen = opened.Add;
                 var result = DesktopRuntimeDiscovery.Discover(evidence);
@@ -195,7 +192,7 @@ internal static class DesktopRuntimeDiscoveryTests
             });
         foreach (var (name, rawError) in new (string, Exception)[]
         {
-            ("cryptography provider", new CryptographicException("private certificate data")),
+            ("metadata provider", new DllNotFoundException("private provider path")),
             ("native denial", new Win32Exception(5, "private native path")),
             ("read IO", new IOException("private IO path"))
         })
@@ -207,7 +204,7 @@ internal static class DesktopRuntimeDiscoveryTests
                 DesktopRuntimeValidationException? wrapped = null;
                 try
                 {
-                    DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify,
+                    DesktopEvidenceOperation.Run(DesktopEvidenceStep.VersionRead,
                         DesktopEvidenceLocation.RuntimeImage, () => throw rawError);
                 }
                 catch (DesktopRuntimeValidationException error) { wrapped = error; }
@@ -240,7 +237,7 @@ internal static class DesktopRuntimeDiscoveryTests
             Check.True(result.Code is not null);
             Check.Equal(0, evidence.RuntimeScans);
         });
-        foreach (var mutation in new[] { "registration", "manifest", "anchor size", "runtime size", "anchor version", "runtime version", "signature", "local root", "path denial" })
+        foreach (var mutation in new[] { "registration", "manifest", "anchor size", "runtime size", "anchor version", "runtime version", "local root", "path denial" })
             test("Desktop runtime: launch revalidation stops after changed " + mutation, () =>
             {
                 using var evidence = new FakeEvidence();
@@ -253,14 +250,13 @@ internal static class DesktopRuntimeDiscoveryTests
                     case "runtime size": evidence.RuntimeImage = evidence.Anchor with { Length = evidence.Anchor.Length + 1 }; break;
                     case "anchor version": evidence.Anchor = evidence.Anchor with { FileVersion = new Version(9, 9, 9, 0) }; break;
                     case "runtime version": evidence.RuntimeImage = evidence.Anchor with { FileVersion = new Version(9, 9, 9, 0) }; break;
-                    case "signature": evidence.RuntimeImage = evidence.Anchor with { TrustedOpenAiSignature = false }; break;
                     case "local root": evidence.LocalApplicationData = Path.Combine(evidence.LocalApplicationData, "moved"); break;
                     case "path denial": evidence.RuntimeOpenFailure = new Win32Exception(5, "private path"); break;
                 }
                 Check.Throws<DesktopRuntimeValidationException>(() => candidate.AcquireLaunchLease!().Dispose());
                 Check.Equal(0, evidence.ActiveLeases);
             });
-        test("Desktop runtime: registration change during expensive verification closes both leases", () =>
+        test("Desktop runtime: registration change during metadata validation closes both leases", () =>
         {
             using var evidence = new FakeEvidence();
             var candidate = DesktopRuntimeDiscovery.Discover(evidence).Candidate!;
@@ -381,7 +377,7 @@ internal static class DesktopRuntimeDiscoveryTests
             var candidate = new CliCandidate(CliSource.Desktop, new ProcessStartInfo("must-never-launch"))
             {
                 Location = SourceBackendLocation.DesktopExistingRuntime,
-                IdentityEvidence = SourceBackendIdentityEvidence.RegisteredPackageVersionAndSignature,
+                IdentityEvidence = SourceBackendIdentityEvidence.RegisteredPackageMetadata,
                 AcquireLaunchLease = () => throw new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopFileChanged, 5)
             };
             var result = await new CodexQuotaClient(QuotaDataSource.Desktop, () => new[] { candidate }, diagnostics.Add, traces.Add)
@@ -392,7 +388,7 @@ internal static class DesktopRuntimeDiscoveryTests
             var start = traces.Single(item => item.Stage == SourceBackendStage.Start);
             Check.Equal(SourceBackendExit.NotStarted, start.Exit);
             Check.Equal(SourceBackendExclusion.DesktopFileChanged, start.Exclusions);
-            Check.Contains("identityEvidence=RegisteredPackageVersionAndSignature processEvidence=NotChecked", start.FormatSafe());
+            Check.Contains("identityEvidence=RegisteredPackageMetadata processEvidence=NotChecked", start.FormatSafe());
         });
         asyncTest("Desktop runtime: cancellation after acquiring launch lease releases it without starting", async () =>
         {
@@ -447,7 +443,7 @@ internal static class DesktopRuntimeDiscoveryTests
         public string Resource { get; }
         public string Runtime { get; }
         public IEnumerable<string> RuntimePaths { get; set; }
-        public DesktopImageIdentity Anchor { get; set; } = new(4096, new Version(0, 159, 2, 0), true);
+        public DesktopImageIdentity Anchor { get; set; } = new(4096, new Version(0, 159, 2, 0));
         public DesktopImageIdentity RuntimeImage { get; set; }
         public Dictionary<string, DesktopImageIdentity> Images { get; } = new();
         public bool ManifestValid { get; set; } = true;

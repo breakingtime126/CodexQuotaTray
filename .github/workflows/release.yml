@@ -2,7 +2,7 @@ name: Build and release Windows tray
 on:
   push:
     tags: ['v*']
-    branches: ['release/0.2.40'] # One explicitly requested stable release; main pushes do not publish.
+    branches: ['release/0.2.41'] # One explicitly requested stable release; main pushes do not publish.
   workflow_dispatch:
     inputs:
       version:

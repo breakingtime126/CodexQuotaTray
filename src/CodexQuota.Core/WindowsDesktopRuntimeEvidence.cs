@@ -1,8 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Xml;
 using Microsoft.Win32.SafeHandles;
@@ -149,7 +147,6 @@ internal sealed class WindowsDesktopRuntimeEvidence : IDesktopRuntimeEvidence, I
         try
         {
             var identity = ReadImageIdentity(lease.Stream, expected, _budget, location,
-                () => WindowsDesktopSignature.Verify(lease.Path, lease.Stream.SafeFileHandle),
                 () =>
                 {
                     var versionInfo = FileVersionInfo.GetVersionInfo(lease.Path);
@@ -162,24 +159,21 @@ internal sealed class WindowsDesktopRuntimeEvidence : IDesktopRuntimeEvidence, I
         catch { lease.Dispose(); throw; }
     }
 
-    // Production and synthetic tests share this exact metadata/signature path. It never
-    // computes an additional whole-file digest. Authenticode verification remains intact
-    // and may perform its own OS-managed content hashing; it is not a metadata-only trust check.
+    // Production and synthetic tests share this metadata-only path. No application-level
+    // image hashing or Authenticode verification is performed for quota queries.
     internal static DesktopImageIdentity ReadImageIdentity(Stream stream, DesktopImageIdentity? expected,
-        DesktopEvidenceBudget budget, DesktopEvidenceLocation location, Action verifySignature,
+        DesktopEvidenceBudget budget, DesktopEvidenceLocation location,
         Func<Version?> readVersion, Action revalidatePath)
     {
         budget.CheckImageSize(stream.Length, location);
         if ((expected is not null && stream.Length != expected.Length) ||
             !DesktopEvidenceOperation.Run(DesktopEvidenceStep.ImageRead, location, () => IsX64Executable(stream), budget))
             throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
-        stream.Position = 0; // The trust API receives a pinned image at a defined starting position.
-        DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify, location, verifySignature, budget);
         revalidatePath();
         var version = DesktopEvidenceOperation.Run(DesktopEvidenceStep.VersionRead, location, readVersion, budget);
         revalidatePath();
         budget.Check(DesktopEvidenceStep.VersionRead, location);
-        return new(stream.Length, version, true);
+        return new(stream.Length, version);
     }
 
     private static bool IsX64Executable(Stream stream)
@@ -609,86 +603,4 @@ internal sealed class DesktopReadOnlyFileLease : IDisposable
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         internal static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint capacity, uint flags);
     }
-}
-
-internal static class WindowsDesktopSignature
-{
-    // Cache-only verification can fail if Windows has no usable cached trust/revocation data.
-    // That is unverified, never permission to fetch a certificate, disable trust, or run anyway.
-    internal static void Verify(string path, SafeFileHandle image)
-    {
-        var pathPointer = Marshal.StringToHGlobalUni(path);
-        var filePointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(TrustFileInfo)));
-        var data = new TrustData
-        {
-            Size = (uint)Marshal.SizeOf(typeof(TrustData)), UiChoice = 2, RevocationChecks = 0,
-            UnionChoice = 1, FileInfo = filePointer, StateAction = 1,
-            ProviderFlags = 0x1000 | 0x80 | 0x2000 // cache only, chain revocation excluding root, reject MD2/MD4
-        };
-        var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
-        try
-        {
-            var file = new TrustFileInfo
-            { Size = (uint)Marshal.SizeOf(typeof(TrustFileInfo)), FilePath = pathPointer, File = image.DangerousGetHandle() };
-            Marshal.StructureToPtr(file, filePointer, false);
-            var status = WinVerifyTrust(new IntPtr(-1), ref action, ref data);
-            if (status != 0) throw new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopSignatureUnverified, status);
-            // Inspect the leaf in the chain that WinVerifyTrust actually accepted, rather than
-            // extracting a possibly different unauthenticated signature from the file.
-            var provider = WTHelperProvDataFromStateData(data.StateData);
-            if (provider == IntPtr.Zero) throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopSignatureUnverified);
-            var signer = WTHelperGetProvSignerFromChain(provider, 0, false, 0);
-            if (signer == IntPtr.Zero) throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopSignatureUnverified);
-            var certificate = WTHelperGetProvCertFromChain(signer, 0);
-            if (certificate == IntPtr.Zero) throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopSignatureUnverified);
-            var context = Marshal.ReadIntPtr(certificate, IntPtr.Size == 8 ? 8 : 4);
-            if (context == IntPtr.Zero) throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopSignatureUnverified);
-            using var leaf = new X509Certificate2(context);
-            var publisherMatches = SubjectAttribute(context, "2.5.4.3") == "OpenAI OpCo, LLC" &&
-                SubjectAttribute(context, "2.5.4.10") == "OpenAI OpCo, LLC" &&
-                SubjectAttribute(context, "2.5.4.7") == "San Francisco" &&
-                SubjectAttribute(context, "2.5.4.8") == "California" && SubjectAttribute(context, "2.5.4.6") == "US" &&
-                leaf.Extensions.OfType<X509EnhancedKeyUsageExtension>()
-                    .Any(extension => extension.EnhancedKeyUsages.Cast<Oid>().Any(oid => oid.Value == "1.3.6.1.5.5.7.3.3"));
-            if (!publisherMatches) throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopPublisherUnverified);
-        }
-        finally
-        {
-            try { data.StateAction = 2; _ = WinVerifyTrust(new IntPtr(-1), ref action, ref data); }
-            finally { Marshal.FreeHGlobal(filePointer); Marshal.FreeHGlobal(pathPointer); }
-        }
-    }
-    private static string SubjectAttribute(IntPtr certificate, string oid)
-    {
-        var oidPointer = Marshal.StringToHGlobalAnsi(oid);
-        try
-        {
-            var text = new StringBuilder(256);
-            var count = CertGetNameString(certificate, 3, 0, oidPointer, text, (uint)text.Capacity);
-            return count is > 1 and < 256 ? text.ToString() : "";
-        }
-        finally { Marshal.FreeHGlobal(oidPointer); }
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TrustFileInfo { public uint Size; public IntPtr FilePath, File, KnownSubject; }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TrustData
-    {
-        public uint Size; public IntPtr PolicyCallbackData, SipClientData;
-        public uint UiChoice, RevocationChecks, UnionChoice; public IntPtr FileInfo;
-        public uint StateAction; public IntPtr StateData, UrlReference; public uint ProviderFlags, UiContext;
-        public IntPtr SignatureSettings;
-    }
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern int WinVerifyTrust(IntPtr window, ref Guid action, ref TrustData data);
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern IntPtr WTHelperProvDataFromStateData(IntPtr state);
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern IntPtr WTHelperGetProvSignerFromChain(IntPtr provider, uint signer,
-        [MarshalAs(UnmanagedType.Bool)] bool counterSigner, uint counterSignerIndex);
-    [DllImport("wintrust.dll", ExactSpelling = true)]
-    private static extern IntPtr WTHelperGetProvCertFromChain(IntPtr signer, uint certificate);
-    [DllImport("crypt32.dll", CharSet = CharSet.Unicode)]
-    private static extern uint CertGetNameString(IntPtr certificate, uint type, uint flags, IntPtr typeParameter,
-        StringBuilder name, uint capacity);
 }

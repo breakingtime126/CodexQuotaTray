@@ -66,18 +66,19 @@ GitHub 镜像计划每 10 分钟同步一次，但调度可能延迟；超过 60
 
 此附加功能仍需标准位置安装的 PowerShell 7.5+。没有有效预测时不显示“预计重置”；镜像与工具自动更新是两项独立功能。[镜像与数据来源说明](docs/reset-mirror.md)
 
-## 0.2.40 变更
+## 0.2.41 变更
 
-0.2.40 移除了 Desktop 额度查询中额外的全文件 SHA-256 及字节一致性比对，不是缓存哈希。
-保留官方签名、Store 包身份、尺寸与 PE 版本、路径和只读句柄检查；它们不再证明 runtime 与包内文件逐字节一致。
-Windows 签名验证本身仍可能计算摘要。更新下载校验和 TPS 读取不变。[验证范围](docs/VERIFY-0.2.40.md)
+取消 Desktop 额度查询主动调用的 Windows 签名验证，不缓存、不再重复验签，也不更改 Windows 安全策略。
+保留 Store 注册包和 manifest 身份、PE 架构/尺寸/版本、受限路径、只读句柄及启动前复核；这些元数据不再证明可执行文件由 OpenAI 签署或内容未被修改。
+TPS 全目录发现间隔由 3 秒改为 15 秒，已跟踪会话仍每 3 秒增量刷新；新会话可能等待约 15 秒，再加调度和遍历时间。
+自动更新清单签名与下载包 SHA-256/大小校验保持不变。[验证范围与性能限制](docs/VERIFY-0.2.41.md)
 
 ## 开发与文档
 
 源码构建需要 .NET SDK 8（C# 12）或兼容更新版；运行 `scripts/build-lightweight.ps1`（Windows）或 `scripts/build-lightweight.sh`。
 
 - [输出速度的计算与含义](docs/OUTPUT-SPEED.md)
-- [当前版本验证记录与已知限制](docs/VERIFY-0.2.40.md)
+- [当前版本验证记录与已知限制](docs/VERIFY-0.2.41.md)
 - [其他验证记录](docs/VERIFICATION.md)
 - [性能说明](docs/PERFORMANCE.md)
 

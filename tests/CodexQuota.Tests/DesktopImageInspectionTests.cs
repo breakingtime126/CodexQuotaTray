@@ -7,16 +7,16 @@ internal static class DesktopImageInspectionTests
     public static void Register(Action<string, Action> test)
     {
         foreach (var size in new long[] { 1024, 373698352, DesktopRuntimeDiscovery.MaximumImageBytes })
-            test("Desktop image: production inspection reads only PE fields without explicit hashing, bytes=" + size, () =>
+            test("Desktop image: production inspection reads only PE fields without hashing or active signature verification, bytes=" + size, () =>
             {
                 using var stream = new HeaderOnlyImage(size);
                 var calls = new List<string>(); var budget = new DesktopEvidenceBudget();
                 var version = new Version(0, 167, 0, 0);
-                var result = WindowsDesktopRuntimeEvidence.ReadImageIdentity(stream, new(size, version, true), budget, Runtime,
-                    () => { Check.Equal(0L, stream.Position); calls.Add("signature"); }, () => { calls.Add("version"); return version; }, () => calls.Add("path"));
-                Check.Equal(new DesktopImageIdentity(size, version, true), result);
+                var result = WindowsDesktopRuntimeEvidence.ReadImageIdentity(stream, new(size, version), budget, Runtime,
+                    () => { calls.Add("version"); return version; }, () => calls.Add("path"));
+                Check.Equal(new DesktopImageIdentity(size, version), result);
                 Check.Equal(16L, stream.BytesRead);
-                Check.True(calls.SequenceEqual(new[] { "signature", "path", "version", "path" }));
+                Check.True(calls.SequenceEqual(new[] { "path", "version", "path" }));
                 var detail = budget.Limit(DesktopEvidenceLimit.DirectoryCount,
                     DesktopEvidenceStep.DirectoryEnumeration, Runtime).Desktop!;
                 Check.Equal(size, detail.ImageBytes);
@@ -24,19 +24,18 @@ internal static class DesktopImageInspectionTests
                 Check.Equal(0L, detail.HashMilliseconds);
                 Check.Equal(DesktopHashProvider.None, detail.HashProvider);
             });
-        test("Desktop image: signed same-size same-version content no longer needs byte equality", () =>
+        test("Desktop image: same-size same-version content no longer needs byte equality", () =>
         {
             using var first = new HeaderOnlyImage(4096, contentMarker: 1);
             using var second = new HeaderOnlyImage(4096, contentMarker: 2);
-            var signatures = 0; var version = new Version(1, 2, 3, 4);
+            var version = new Version(1, 2, 3, 4);
             DesktopImageIdentity Read(HeaderOnlyImage stream) => WindowsDesktopRuntimeEvidence.ReadImageIdentity(
-                stream, null, new(), Runtime, () => signatures++, () => version, () => { });
+                stream, null, new(), Runtime, () => version, () => { });
             Check.Equal(Read(first), Read(second));
-            Check.Equal(2, signatures);
             Check.Equal(32L, first.BytesRead + second.BytesRead);
         });
         foreach (var problem in new[] { "empty", "oversize", "size mismatch", "not PE", "not x64", "DLL" })
-            test("Desktop image: rejects " + problem + " before signature or version calls", () =>
+            test("Desktop image: rejects " + problem + " before version calls", () =>
             {
                 var size = problem == "empty" ? 0 : problem == "oversize" ? DesktopRuntimeDiscovery.MaximumImageBytes + 1 : 4096;
                 using var stream = new HeaderOnlyImage(size);
@@ -45,25 +44,16 @@ internal static class DesktopImageInspectionTests
                 if (problem == "DLL") BinaryPrimitives.WriteUInt16LittleEndian(stream.Header.AsSpan(0x96), 0x2002);
                 var calls = 0;
                 Check.Throws<DesktopRuntimeValidationException>(() => WindowsDesktopRuntimeEvidence.ReadImageIdentity(
-                    stream, problem == "size mismatch" ? new(4097, null, true) : null, new(), Runtime,
-                    () => calls++, () => { calls++; return null; }, () => calls++));
+                    stream, problem == "size mismatch" ? new(4097, null) : null, new(), Runtime,
+                    () => { calls++; return null; }, () => calls++));
                 Check.Equal(0, calls);
             });
-        test("Desktop image: signature rejection prevents version lookup and never returns trusted identity", () =>
-        {
-            using var stream = new HeaderOnlyImage(4096); var laterCalls = 0;
-            Check.Throws<DesktopRuntimeValidationException>(() => WindowsDesktopRuntimeEvidence.ReadImageIdentity(
-                stream, null, new(), Runtime,
-                () => throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopSignatureUnverified),
-                () => { laterCalls++; return null; }, () => laterCalls++));
-            Check.Equal(0, laterCalls);
-        });
-        test("Desktop image: signed images with no PE version preserve nullable metadata", () =>
+        test("Desktop image: images with no PE version preserve nullable metadata", () =>
         {
             using var stream = new HeaderOnlyImage(4096);
             var result = WindowsDesktopRuntimeEvidence.ReadImageIdentity(stream, null, new(), Runtime,
-                () => { }, () => null, () => { });
-            Check.Null(result.FileVersion); Check.True(result.TrustedOpenAiSignature);
+                () => null, () => { });
+            Check.Null(result.FileVersion);
         });
         test("Desktop image: old evidence enum values remain stable and new evidence makes no bytes claim", () =>
         {
@@ -71,12 +61,20 @@ internal static class DesktopImageInspectionTests
             Check.Equal(1, (int)SourceBackendIdentityEvidence.RegisteredDesktopPackage);
             Check.Equal(2, (int)SourceBackendIdentityEvidence.RegisteredPackageBytesAndSignature);
             Check.Equal(3, (int)SourceBackendIdentityEvidence.RegisteredPackageVersionAndSignature);
+            Check.Equal(4, (int)SourceBackendIdentityEvidence.RegisteredPackageMetadata);
             Check.Null(typeof(QuotaState).Assembly.GetType("CodexQuota.Core.DesktopImageHasher"));
+            Check.Null(typeof(QuotaState).Assembly.GetType("CodexQuota.Core.WindowsDesktopSignature"));
+            Check.False(typeof(QuotaState).Assembly.GetTypes().SelectMany(type => type.GetMethods(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance))
+                .Any(method => method.GetCustomAttributes(typeof(System.Runtime.InteropServices.DllImportAttribute), false)
+                    .Cast<System.Runtime.InteropServices.DllImportAttribute>().Any(import =>
+                        import.Value.Equals("wintrust.dll", StringComparison.OrdinalIgnoreCase))));
         });
     }
 
     // A large virtual executable whose body cannot be read: any accidental full-file loop
-    // fails deterministically. Signature/version callbacks are synthetic, not OS trust tests.
+    // fails deterministically. Version callbacks are synthetic, not OS metadata tests.
     private sealed class HeaderOnlyImage : Stream
     {
         private readonly long length;

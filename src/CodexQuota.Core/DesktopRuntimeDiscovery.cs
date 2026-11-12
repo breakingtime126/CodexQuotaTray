@@ -1,11 +1,10 @@
 using System.ComponentModel;
 using System.Security;
-using System.Security.Cryptography;
 
 namespace CodexQuota.Core;
 
 internal sealed record DesktopPackageRegistration(string FullName, string Root);
-internal sealed record DesktopImageIdentity(long Length, Version? FileVersion, bool TrustedOpenAiSignature);
+internal sealed record DesktopImageIdentity(long Length, Version? FileVersion);
 internal interface IDesktopImageLease : IDisposable
 {
     string Path { get; }
@@ -21,8 +20,8 @@ internal interface IDesktopRuntimeEvidence
 }
 
 /// <summary>
-/// Finds only existing, bounded Desktop runtime layouts. Package matching establishes official
-/// component identity, not which application created the file or a stable external Desktop API.
+/// Finds only existing, bounded Desktop runtime layouts. Package metadata matching establishes registered
+/// component correspondence, not cryptographic executable identity, not which application created the file or a stable external Desktop API.
 /// Never copies a package image, searches arbitrary caches, or attempts to repair permissions.
 /// </summary>
 internal static class DesktopRuntimeDiscovery
@@ -66,13 +65,12 @@ internal static class DesktopRuntimeDiscovery
                     using var runtime = evidence.OpenImage(path, anchorIdentity);
                     ValidateMatch(anchorIdentity, runtime.Identity);
                     return Candidate(path, SourceBackendLocation.DesktopExistingRuntime,
-                        SourceBackendIdentityEvidence.RegisteredPackageVersionAndSignature);
+                        SourceBackendIdentityEvidence.RegisteredPackageMetadata);
                 }
                 catch (DesktopRuntimeValidationException error)
                 {
                     const SourceBackendExclusion staleIdentityReasons = SourceBackendExclusion.DesktopRuntimeUnverified |
-                        SourceBackendExclusion.DesktopSignatureUnverified | SourceBackendExclusion.DesktopVersionMismatch |
-                        SourceBackendExclusion.DesktopPublisherUnverified;
+                        SourceBackendExclusion.DesktopVersionMismatch;
                     // Only an established identity mismatch can describe a stale sibling.
                     // Native/read failures now carry safe operation labels in this exception
                     // type too; they must still stop immediately, as they did before wrapping.
@@ -222,14 +220,13 @@ internal static class DesktopRuntimeDiscovery
     {
         if (identity.Length <= 0 || identity.Length > MaximumImageBytes)
             throw Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
-        if (!identity.TrustedOpenAiSignature) throw Reject(SourceBackendExclusion.DesktopSignatureUnverified);
     }
 
     private static void ValidateMatch(DesktopImageIdentity anchor, DesktopImageIdentity runtime)
     {
         ValidateImage(runtime);
-        // Deliberately no whole-image hash or byte-equality claim. Both images must still
-        // have a trusted OpenAI signature, matching size and matching available PE version.
+        // Metadata correspondence only: no whole-image hash, signature or byte-equality claim.
+        // Images must have matching size and matching available PE version.
         if (anchor.Length != runtime.Length)
             throw Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
         // The Desktop MSIX version and bundled CLI version are different version domains.
@@ -240,12 +237,12 @@ internal static class DesktopRuntimeDiscovery
 
     internal static bool IsExpectedFailure(Exception error) => error is IOException or UnauthorizedAccessException or
         SecurityException or ArgumentException or NotSupportedException or Win32Exception or DllNotFoundException or
-        EntryPointNotFoundException or CryptographicException or System.Xml.XmlException;
+        EntryPointNotFoundException or System.Xml.XmlException;
     internal static SourceBackendExclusion FailureReason(Exception error) => error is DesktopRuntimeValidationException validation
         ? validation.Exclusion : error is FileNotFoundException or DirectoryNotFoundException ? SourceBackendExclusion.Missing :
         error is DllNotFoundException or EntryPointNotFoundException ? SourceBackendExclusion.ProviderUnavailable :
         error is ArgumentException or NotSupportedException ? SourceBackendExclusion.InvalidPath :
-        error is CryptographicException ? SourceBackendExclusion.DesktopSignatureUnverified : SourceBackendExclusion.Inaccessible;
+        SourceBackendExclusion.Inaccessible;
     internal static int? FailureCode(Exception error) => error is DesktopRuntimeValidationException validation ? validation.Code :
         error is Win32Exception native ? native.NativeErrorCode : error.HResult;
     internal static DesktopRuntimeValidationException Reject(SourceBackendExclusion reason,

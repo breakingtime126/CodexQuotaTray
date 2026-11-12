@@ -1,3 +1,8 @@
+Current unpublished changes: [Desktop metadata-only checks](PERFORMANCE-DESKTOP-METADATA.md)
+and [TPS discovery cadence](PERFORMANCE-TPS-DISCOVERY.md). The sections below
+record earlier release behavior; their signature-retention statements do not apply
+to the current candidate.
+
 # 0.2.40 preview: remove explicit Desktop image hashing
 
 Desktop quota discovery and pre-launch validation no longer compute or compare

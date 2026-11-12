@@ -90,10 +90,9 @@ public sealed class CodexQuotaClient
             var ambiguous = (discovery.Exclusions & (SourceBackendExclusion.DesktopComponent |
                 SourceBackendExclusion.VsCodeComponent | SourceBackendExclusion.WindowsAppsAlias)) != 0;
             var desktopUnverified = (discovery.Exclusions & (SourceBackendExclusion.DesktopPackageUnverified |
-                SourceBackendExclusion.DesktopRuntimeUnverified | SourceBackendExclusion.DesktopSignatureUnverified |
+                SourceBackendExclusion.DesktopRuntimeUnverified |
                 SourceBackendExclusion.DesktopVersionMismatch | SourceBackendExclusion.DesktopFileChanged |
-                SourceBackendExclusion.DesktopUnsafePath | SourceBackendExclusion.DesktopEvidenceLimit |
-                SourceBackendExclusion.DesktopPublisherUnverified)) != 0;
+                SourceBackendExclusion.DesktopUnsafePath | SourceBackendExclusion.DesktopEvidenceLimit)) != 0;
             var errorKind = (discovery.Exclusions & SourceBackendExclusion.DesktopEvidenceLimit) != 0 ? CliErrorKind.DesktopEvidenceLimit :
                 desktopUnverified ? CliErrorKind.DesktopRuntimeUnverified : mismatch || (discovery.Exclusions & SourceBackendExclusion.SourceMismatch) != 0
                 ? CliErrorKind.SourceMismatch : ambiguous ? CliErrorKind.SourceAmbiguous : CliErrorKind.None;

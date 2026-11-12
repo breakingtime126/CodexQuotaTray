@@ -205,9 +205,9 @@ internal static class DesktopNativeReadTests
             var error = Failure(() => DesktopEvidenceOperation.Run(DesktopEvidenceStep.ManifestRead, DesktopEvidenceLocation.PackageManifest, () => throw original));
             Check.True(ReferenceEquals(original, error));
             Check.True(error.EvidenceReadFailure);
-            var mismatch = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopSignatureUnverified,
-                unchecked((int)0x800B0100));
-            var labelledMismatch = Failure(() => DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify,
+            var mismatch = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopVersionMismatch,
+                13);
+            var labelledMismatch = Failure(() => DesktopEvidenceOperation.Run(DesktopEvidenceStep.VersionRead,
                 DesktopEvidenceLocation.RuntimeImage, () => throw mismatch));
             Check.False(labelledMismatch.EvidenceReadFailure);
             Check.Equal(mismatch.Code, labelledMismatch.Code);
