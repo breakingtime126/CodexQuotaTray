@@ -148,31 +148,38 @@ internal sealed class WindowsDesktopRuntimeEvidence : IDesktopRuntimeEvidence, I
         var lease = DesktopReadOnlyFileLease.Open(path, location, _budget);
         try
         {
-            var stream = lease.Stream;
-            if (stream.Length > DesktopRuntimeDiscovery.MaximumImageBytes)
-            {
-                // ReserveImage reports the exact size limit before any full-image read.
-                _budget.ReserveImage(stream.Length, location);
-            }
-            if (stream.Length <= 0 || (expected is not null && stream.Length != expected.Length) ||
-                !DesktopEvidenceOperation.Run(DesktopEvidenceStep.ImageRead, location, () => IsX64Executable(stream), _budget))
-                throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
-            stream.Position = 0;
-            var hash = DesktopImageHasher.Compute(stream, _budget, location);
-            if (expected is not null && !string.Equals(expected.Sha256, hash, StringComparison.Ordinal))
-                throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
-            DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify, location,
-                () => WindowsDesktopSignature.Verify(lease.Path, stream.SafeFileHandle), _budget);
-            lease.RevalidatePath();
-            var versionInfo = DesktopEvidenceOperation.Run(DesktopEvidenceStep.VersionRead, location,
-                () => FileVersionInfo.GetVersionInfo(lease.Path), _budget);
-            lease.RevalidatePath();
-            Version? version = string.IsNullOrWhiteSpace(versionInfo.FileVersion) ? null :
-                new(versionInfo.FileMajorPart, versionInfo.FileMinorPart, versionInfo.FileBuildPart, versionInfo.FilePrivatePart);
-            _budget.Check(DesktopEvidenceStep.VersionRead, location);
-            return new ImageLease(lease, new(stream.Length, hash, version, true));
+            var identity = ReadImageIdentity(lease.Stream, expected, _budget, location,
+                () => WindowsDesktopSignature.Verify(lease.Path, lease.Stream.SafeFileHandle),
+                () =>
+                {
+                    var versionInfo = FileVersionInfo.GetVersionInfo(lease.Path);
+                    return string.IsNullOrWhiteSpace(versionInfo.FileVersion) ? null :
+                        new Version(versionInfo.FileMajorPart, versionInfo.FileMinorPart,
+                            versionInfo.FileBuildPart, versionInfo.FilePrivatePart);
+                }, lease.RevalidatePath);
+            return new ImageLease(lease, identity);
         }
         catch { lease.Dispose(); throw; }
+    }
+
+    // Production and synthetic tests share this exact metadata/signature path. It never
+    // computes an additional whole-file digest. Authenticode verification remains intact
+    // and may perform its own OS-managed content hashing; it is not a metadata-only trust check.
+    internal static DesktopImageIdentity ReadImageIdentity(Stream stream, DesktopImageIdentity? expected,
+        DesktopEvidenceBudget budget, DesktopEvidenceLocation location, Action verifySignature,
+        Func<Version?> readVersion, Action revalidatePath)
+    {
+        budget.CheckImageSize(stream.Length, location);
+        if ((expected is not null && stream.Length != expected.Length) ||
+            !DesktopEvidenceOperation.Run(DesktopEvidenceStep.ImageRead, location, () => IsX64Executable(stream), budget))
+            throw DesktopRuntimeDiscovery.Reject(SourceBackendExclusion.DesktopRuntimeUnverified);
+        stream.Position = 0; // The trust API receives a pinned image at a defined starting position.
+        DesktopEvidenceOperation.Run(DesktopEvidenceStep.SignatureVerify, location, verifySignature, budget);
+        revalidatePath();
+        var version = DesktopEvidenceOperation.Run(DesktopEvidenceStep.VersionRead, location, readVersion, budget);
+        revalidatePath();
+        budget.Check(DesktopEvidenceStep.VersionRead, location);
+        return new(stream.Length, version, true);
     }
 
     private static bool IsX64Executable(Stream stream)

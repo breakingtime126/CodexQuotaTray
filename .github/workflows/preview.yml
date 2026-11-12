@@ -1,0 +1,96 @@
+name: Build and publish isolated preview
+on:
+  push:
+    branches: ['preview/remove-query-hash']
+permissions:
+  contents: read
+concurrency:
+  group: codexquotatray-hash-removal-preview
+  cancel-in-progress: false
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+jobs:
+  build:
+    if: github.repository == 'breakingtime126/CodexQuotaTray' && github.ref == 'refs/heads/preview/remove-query-hash'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      exe_sha256: ${{ steps.hash.outputs.exe_sha256 }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate isolated preview identity
+        shell: pwsh
+        run: |
+          [xml]$props = Get-Content Directory.Build.props
+          if ($props.Project.PropertyGroup.Version -ne '0.2.40-preview.1' -or $props.Project.PropertyGroup.FileVersion -ne '0.2.39.1' -or $props.Project.PropertyGroup.AssemblyVersion -ne '0.2.39.1') { throw 'Unexpected preview identity' }
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
+        with:
+          dotnet-version: '8.0.427'
+      - name: Pin SDK and official package source
+        shell: pwsh
+        run: |
+          '{"sdk":{"version":"8.0.427","rollForward":"disable"}}' | Set-Content global.json
+          '<configuration><packageSources><clear/><add key="nuget.org" value="https://api.nuget.org/v3/index.json"/></packageSources></configuration>' | Set-Content NuGet.Config
+          if ((dotnet --version) -ne '8.0.427') { throw 'Unexpected SDK' }
+      - name: Core tests and net48 single EXE
+        shell: bash
+        run: bash scripts/build-lightweight.sh
+      - name: Native menu structure smoke (no accounts or network)
+        shell: pwsh
+        run: |
+          dotnet build tests/CodexQuota.FrameworkSmoke -c Release -m:1
+          if ($LASTEXITCODE -ne 0) { throw 'Native menu smoke build failed' }
+          & ./tests/CodexQuota.FrameworkSmoke/bin/Release/net48/CodexQuotaFrameworkSmoke.exe --menu
+          if ($LASTEXITCODE -ne 0) { throw 'Native menu smoke failed' }
+      - name: Mirror, preview publication, and PowerShell transport offline tests
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]"7.5") { throw "PowerShell 7.5+ required" }
+          python -m unittest discover -s scripts -p test_reset_mirror.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Mirror tests failed' }
+          python -m unittest discover -s scripts -p test_ci_preview.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Preview publisher tests failed' }
+          ./scripts/test-reset-powershell.ps1
+          ./scripts/test-reset-producer-core.ps1 -CoreDll ./src/CodexQuota.Core/bin/Release/net8.0/CodexQuota.Core.dll
+      - name: Check binary and state verification limits
+        id: hash
+        shell: pwsh
+        run: |
+          $exe = Get-Item artifacts/lightweight/CodexQuotaTray.exe
+          if ($exe.VersionInfo.FileVersion -ne '0.2.39.1' -or -not $exe.VersionInfo.ProductVersion.StartsWith('0.2.40-preview.1+')) { throw 'EXE version mismatch' }
+          "exe_sha256=$((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          'Preview only. Live Desktop quota/CPU and unelevated updater lifecycle were NOT tested. No update.json or latest release is published.' >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        id: upload
+        with:
+          name: CodexQuotaTray-0.2.40-preview.1-${{ github.sha }}
+          path: artifacts/lightweight/CodexQuotaTray.exe
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: dist
+      - name: Publish verified prerelease without changing latest or automatic updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+          EXPECTED_EXE_SHA256: ${{ needs.build.outputs.exe_sha256 }}
+        run: python3 scripts/ci-preview.py

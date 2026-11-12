@@ -66,6 +66,12 @@ GitHub 镜像计划每 10 分钟同步一次，但调度可能延迟；超过 60
 
 此附加功能仍需标准位置安装的 PowerShell 7.5+。没有有效预测时不显示“预计重置”；镜像与工具自动更新是两项独立功能。[镜像与数据来源说明](docs/reset-mirror.md)
 
+## 当前源码预览变更
+
+0.2.40-preview.1 移除了 Desktop 额度查询中额外的全文件 SHA-256 及字节一致性比对，不是缓存哈希。
+保留官方签名、Store 包身份、尺寸与 PE 版本、路径和只读句柄检查；它们不再证明 runtime 与包内文件逐字节一致。
+Windows 签名验证本身仍可能计算摘要。更新下载校验和 TPS 读取不变。[验证范围](docs/VERIFY-0.2.40.md)
+
 ## 开发与文档
 
 源码构建需要 .NET SDK 8（C# 12）或兼容更新版；运行 `scripts/build-lightweight.ps1`（Windows）或 `scripts/build-lightweight.sh`。

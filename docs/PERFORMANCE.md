@@ -1,3 +1,35 @@
+# 0.2.40 preview: remove explicit Desktop image hashing
+
+Desktop quota discovery and pre-launch validation no longer compute or compare
+an application-level SHA-256 of the package/runtime executables. This is removal,
+not a cached digest. The removed successful runtime path previously made four
+full-image passes (about 1.39 GiB for four 373,698,352-byte image reads).
+
+The production metadata inspection now reads only the required x64 PE header
+fields. Synthetic regression tests exercise that exact method with 1 KiB,
+373,698,352-byte and 512 MiB virtual images whose body throws if read; each
+inspection consumes 16 bytes of explicit PE reads and reports zero hash work.
+This count excludes Windows Authenticode and version APIs. Their implementation
+may still read/hash the image. Four signature validations remain, so this is not
+a claim that the whole Windows query reads only 64 bytes or that every CPU spike
+has been eliminated.
+
+Store registration/origin/publisher, manifest identity, trusted OpenAI signature,
+PE architecture and version, size limits/matching, bounded local runtime paths,
+no-reparse checks, read-only leases denying write/delete, and launch revalidation
+remain. The evidence label is now `RegisteredPackageVersionAndSignature`.
+**Matching size/version/signature no longer proves byte-for-byte equality to the
+package image.** Both missing PE versions remain compatible, as before, with the
+same-size and trusted-signature requirements but without the old digest binding.
+
+Updates still verify their downloaded packages. TPS file fingerprints are also
+unchanged. Overall verification timeout and cancellation remain cooperative.
+The preview is not a published release and has not been installed on the user's
+computer. Windows whole-process performance and real signature behavior require
+separate validation; see [verification](VERIFY-0.2.40.md).
+
+---
+
 # 0.2.29 resource audit
 
 ## Scope and limits

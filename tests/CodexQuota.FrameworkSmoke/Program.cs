@@ -57,19 +57,10 @@ internal static class Tests
         {
             Console.WriteLine("CLR: " + Environment.Version);
             TrayVisibilityAbiSmoke.Run(Check);
-            // Synthetic bytes only; verifies the actual embedded Desktop hash factory on Windows.
-            // Cloud compiles this test but does not claim to execute Windows CNG.
-            var hashFactoryType = typeof(QuotaState).Assembly.GetType("CodexQuota.Core.DesktopImageHasher", throwOnError: true)!;
-            var createHash = hashFactoryType.GetMethod("CreateHash", BindingFlags.Static | BindingFlags.NonPublic)
-                ?? throw new InvalidDataException("Desktop hash factory unavailable.");
-            using (var desktopHash = (HashAlgorithm)createHash.Invoke(null, null)!)
-            {
-                Check(desktopHash is SHA256Cng, "Desktop production factory selects Windows SHA256Cng");
-                Check(BitConverter.ToString(desktopHash.ComputeHash(Array.Empty<byte>())).Replace("-", "").ToLowerInvariant() ==
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "Desktop CNG empty SHA256 vector");
-                Check(BitConverter.ToString(desktopHash.ComputeHash(System.Text.Encoding.ASCII.GetBytes("abc"))).Replace("-", "").ToLowerInvariant() ==
-                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "Desktop CNG abc SHA256 vector");
-            }
+            Check(typeof(QuotaState).Assembly.GetType("CodexQuota.Core.DesktopImageHasher") is null,
+                "Desktop quota path has no standalone whole-image hash implementation");
+            Check(Enum.IsDefined(typeof(SourceBackendIdentityEvidence), "RegisteredPackageVersionAndSignature"),
+                "Desktop diagnostics describe signature/version evidence without byte equality");
             // Exercise the exact production Windows identity boundary. Construction only:
             // no Enter, no StartServer, no mutex acquisition, no tray, registry or real CLI.
             using (var identity = WindowsIdentity.GetCurrent())
