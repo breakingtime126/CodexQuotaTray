@@ -11,6 +11,8 @@ namespace CodexQuota.Tray;
 internal sealed class NativeTrayIcon : NativeWindow, IDisposable
 {
     private const uint CallbackMessage = 0x8001;
+    private const int SessionChangeMessage = 0x02B1, SessionLock = 7, SessionUnlock = 8;
+    private const uint NotifyForThisSession = 0;
     private const uint DismissMenuMessage = 0x8002;
     private const uint MessageFlag = 0x01, IconFlag = 0x02, TipFlag = 0x04, GuidFlag = 0x20, ShowTipFlag = 0x80;
     private const uint AllFields = MessageFlag | IconFlag | TipFlag;
@@ -24,7 +26,8 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
     private readonly TrayHoverSession _hoverSession = new();
     private readonly Stopwatch _hoverClock = Stopwatch.StartNew();
     private readonly TrayPopupSession _popup = new();
-    private bool _visible, _disposed, _menuHadForeground;
+    private bool _visible, _disposed, _menuHadForeground, _sessionLocked;
+    private readonly bool _sessionWatchRegistered;
     private Icon? _icon;
     private string _text = "";
     private HoverCardModel? _hoverContent;
@@ -56,13 +59,13 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
     public event EventHandler? EnvironmentChanged;
     public event EventHandler? ClockOrResumeChanged;
     public event Action<TrayDiagnostic>? Diagnostic;
-    public event EventHandler? RegistrationUnavailable;
     public event EventHandler? Selected;
     public event Action<HoverLinkRegion>? LinkActivated;
 
     public NativeTrayIcon()
     {
         CreateHandle(new CreateParams { Caption = "CodexQuotaTray.MessageWindow" });
+        _sessionWatchRegistered = WTSRegisterSessionNotification(Handle, NotifyForThisSession);
         _hoverTimer.Tick += (_, _) => CheckPointer();
         _registrationTimer.Tick += (_, _) =>
         {
@@ -85,7 +88,11 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
         get => _visible;
         set
         {
-            if (value && !_visible) ResetRegistrationRetry();
+            if (value && !_visible)
+            {
+                ResetRegistrationRetry();
+                if (!_sessionWatchRegistered) Diagnostic?.Invoke(TrayDiagnostic.TraySessionWatchUnavailable);
+            }
             _visible = value;
             if (value) Update();
             else Remove();
@@ -110,8 +117,7 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
     };
     private void Update(uint fields = AllFields)
     {
-        if (_disposed || !_visible || _icon is null) return;
-        if (!_registration.IsAdded && !_registrationRetry.CanAttempt) return;
+        if (_disposed || !_visible || _sessionLocked || _icon is null || !_registrationRetry.CanAttempt) return;
         // Animation changes HICON only. Do not restart/rewrite the Shell tooltip or callback
         // every frame; the successfully registered identity is retained for all calls.
         var result = _registration.Update((operation, identity) => Notify(operation, identity, fields));
@@ -127,18 +133,22 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
 
         CloseMenu();
         EndHover();
-        Diagnostic?.Invoke(TrayDiagnostic.TrayRegistrationFailed);
+        var wasSlow = _registrationRetry.IsSlow;
+        if (!wasSlow) Diagnostic?.Invoke(TrayDiagnostic.TrayRegistrationFailed);
         if (_registrationRetry.Failed() is { } delay)
         {
+            if (!wasSlow && _registrationRetry.IsSlow) Diagnostic?.Invoke(TrayDiagnostic.TrayRegistrationRetrySlow);
             _registrationTimer.Interval = delay;
             _registrationTimer.Start();
         }
-        else
-        {
-            _visible = false; // No new attempts during the failure dialog's nested message loop.
-            Diagnostic?.Invoke(TrayDiagnostic.TrayRegistrationRetryExhausted);
-            RegistrationUnavailable?.Invoke(this, EventArgs.Empty);
-        }
+    }
+    private void QueueRecovery()
+    {
+        if (_disposed || !_visible || _sessionLocked) return;
+        _registration.ProbeOnNextUpdate();
+        _registrationTimer.Stop();
+        _registrationTimer.Interval = _registrationRetry.ScheduleRecovery();
+        _registrationTimer.Start();
     }
     private bool Notify(TrayShellOperation operation, TrayIconIdentity identity, uint modifiedFields = AllFields)
     {
@@ -344,18 +354,30 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
             EnvironmentChanged?.Invoke(this, EventArgs.Empty);
             if (message.Msg == 0x001E) ClockOrResumeChanged?.Invoke(this, EventArgs.Empty);
         }
+        else if (message.Msg == SessionChangeMessage && message.WParam.ToInt64() is SessionLock or SessionUnlock)
+        {
+            _sessionLocked = message.WParam.ToInt64() == SessionLock;
+            Diagnostic?.Invoke(_sessionLocked ? TrayDiagnostic.TraySessionLocked : TrayDiagnostic.TraySessionUnlocked);
+            if (_sessionLocked)
+            {
+                CloseMenu();
+                EndHover();
+                ResetRegistrationRetry();
+            }
+            else QueueRecovery();
+        }
         else if (message.Msg == 0x0218 && message.WParam.ToInt64() is 7 or 18)
         {
-            // PBT_APMRESUMESUSPEND / PBT_APMRESUMEAUTOMATIC: refresh current server state.
+            Diagnostic?.Invoke(TrayDiagnostic.TrayResumed);
+            QueueRecovery(); // If still locked, the unlock event starts recovery instead.
             ClockOrResumeChanged?.Invoke(this, EventArgs.Empty);
         }
         else if ((uint)message.Msg == _taskbarCreated)
         {
             CloseMenu();
             EndHover();
-            _registration.Forget();
-            ResetRegistrationRetry();
-            Update();
+            Diagnostic?.Invoke(TrayDiagnostic.TrayTaskbarCreated);
+            QueueRecovery();
         }
         else if ((uint)message.Msg == CallbackMessage)
         {
@@ -406,6 +428,7 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
         _disposed = true;
         _hoverTimer.Dispose();
         _registrationTimer.Dispose();
+        if (_sessionWatchRegistered) WTSUnRegisterSessionNotification(Handle);
         DestroyHandle();
     }
 
@@ -429,6 +452,12 @@ internal sealed class NativeTrayIcon : NativeWindow, IDisposable
     private static extern bool ShellNotifyIcon(uint operation, ref NotifyIconData data);
     [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconGetRect")]
     private static extern int ShellNotifyIconGetRect(ref NotifyIconIdentifier identity, out Rect rectangle);
+    [DllImport("wtsapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WTSRegisterSessionNotification(IntPtr window, uint flags);
+    [DllImport("wtsapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WTSUnRegisterSessionNotification(IntPtr window);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern uint RegisterWindowMessage(string message);
     [DllImport("user32.dll")]

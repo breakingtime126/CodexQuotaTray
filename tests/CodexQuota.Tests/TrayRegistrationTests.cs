@@ -151,10 +151,40 @@ internal static class TrayRegistrationTests
             Check.Equal(TrayIconIdentity.WindowId, state.Identity);
         });
 
-        test("tray registration retry: finite backoff is gated between timer ticks", () =>
+        test("tray recovery: preserve and update the existing icon after taskbar recreation or unlock", () =>
+        {
+            var state = new TrayIconRegistration();
+            state.Update((_, _) => true);
+            state.ProbeOnNextUpdate();
+            Check.False(state.IsAdded);
+            var calls = new List<TrayShellOperation>();
+            Check.Equal(TrayRegistrationResult.RegisteredGuid, state.Update((op, _) =>
+            {
+                calls.Add(op);
+                return op == TrayShellOperation.Modify;
+            }));
+            Check.True(calls.SequenceEqual(new[] { TrayShellOperation.Modify }));
+        });
+
+        test("tray recovery: re-add a lost icon with its accepted identity and callback version", () =>
+        {
+            var state = new TrayIconRegistration();
+            state.Update((_, id) => id == TrayIconIdentity.WindowId);
+            state.ProbeOnNextUpdate();
+            var calls = new List<TrayShellOperation>();
+            Check.Equal(TrayRegistrationResult.RegisteredWindowId, state.Update((op, id) =>
+            {
+                Check.Equal(TrayIconIdentity.WindowId, id);
+                calls.Add(op);
+                return op != TrayShellOperation.Modify;
+            }));
+            Check.True(calls.SequenceEqual(new[] { TrayShellOperation.Modify, TrayShellOperation.Add, TrayShellOperation.SetVersion }));
+        });
+
+        test("tray registration retry: backoff is gated and continues at low frequency", () =>
         {
             var retry = new TrayRegistrationRetry();
-            foreach (var delay in new[] { 1000, 2000, 5000, 10000, 30000 })
+            foreach (var delay in new[] { 1000, 2000, 5000, 10000, 30000, 60000, 60000, 60000 })
             {
                 Check.True(retry.CanAttempt);
                 Check.Equal((int?)delay, retry.Failed());
@@ -163,25 +193,23 @@ internal static class TrayRegistrationTests
                 for (var frame = 0; frame < 30; frame++) Check.Null(retry.Failed());
                 retry.TimerElapsed();
             }
-            Check.Null(retry.Failed());
-            Check.True(retry.IsExhausted);
-            Check.False(retry.CanAttempt);
-            retry.TimerElapsed();
-            Check.False(retry.CanAttempt);
+            retry.Reset();
+            Check.True(retry.CanAttempt);
+            Check.False(retry.IsSlow);
+            Check.Equal((int?)1000, retry.Failed());
         });
 
-        test("tray registration retry: success removal or Explorer reset cancels exhaustion", () =>
+        test("tray registration retry: recovery waits briefly and can interrupt a slow retry", () =>
         {
             var retry = new TrayRegistrationRetry();
-            for (var i = 0; i < 6; i++) { retry.Failed(); retry.TimerElapsed(); }
-            Check.True(retry.IsExhausted);
-            retry.Reset();
-            Check.True(retry.CanAttempt);
-            Check.False(retry.IsWaiting);
-            Check.False(retry.IsExhausted);
+            for (var i = 0; i < 5; i++) { retry.Failed(); retry.TimerElapsed(); }
+            Check.Equal((int?)60000, retry.Failed());
+            Check.True(retry.IsSlow);
+            Check.Equal(1000, retry.ScheduleRecovery());
+            Check.False(retry.CanAttempt);
+            Check.False(retry.IsSlow);
+            retry.TimerElapsed();
             Check.Equal((int?)1000, retry.Failed());
-            retry.Reset();
-            Check.True(retry.CanAttempt);
         });
     }
 }

@@ -163,12 +163,6 @@ internal sealed class TrayContext : ApplicationContext
         _tray.LinkActivated += OpenResetLink;
         _tray.HoverEntered += (_, _) => BeginRefresh(RefreshTrigger.Hover);
         _tray.Diagnostic += _log.Record;
-        _tray.RegistrationUnavailable += async (_, _) =>
-        {
-            if (_exiting) return;
-            MessageBox.Show("Windows 暂时无法显示额度托盘图标，重试仍未成功。\n关闭此提示后程序会退出，请稍后重新打开。", "Codex 额度", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            await CloseAsync();
-        };
         _menu.Opening += (_, _) => { ApplyTheme(); Render(); ApplyStartupState(_startupManager.Inspect()); };
         ApplyTheme();
         Render();

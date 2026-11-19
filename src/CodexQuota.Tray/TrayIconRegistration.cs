@@ -3,7 +3,7 @@ namespace CodexQuota.Tray;
 internal enum TrayIconIdentity { Guid, WindowId }
 internal enum TrayShellOperation : uint { Add, Modify, Delete, SetFocus, SetVersion }
 internal enum TrayRegistrationResult { Unchanged, RegisteredGuid, RegisteredWindowId, Failed }
-internal enum TrayDiagnostic { TrayRegisteredGuid, TrayRegisteredWindowId, TrayRegistrationFailed, TrayRegistrationRetryExhausted, TrayVersion4Unavailable }
+internal enum TrayDiagnostic { TrayRegisteredGuid, TrayRegisteredWindowId, TrayRegistrationFailed, TrayRegistrationRetrySlow, TrayVersion4Unavailable, TraySessionWatchUnavailable, TraySessionLocked, TraySessionUnlocked, TrayResumed, TrayTaskbarCreated }
 
 /// <summary>Shell calls are injected so registration failures can be tested without Explorer.</summary>
 internal sealed class TrayIconRegistration
@@ -47,6 +47,9 @@ internal sealed class TrayIconRegistration
     private TrayRegistrationResult RegisteredResult() => Identity == TrayIconIdentity.Guid
         ? TrayRegistrationResult.RegisteredGuid : TrayRegistrationResult.RegisteredWindowId;
 
+    // A taskbar/session event is not proof that the Shell dropped the old icon.
+    public void ProbeOnNextUpdate() => IsAdded = false;
+
     public void Forget()
     {
         // Explorer restart must retain an identity already accepted by the Shell.
@@ -64,27 +67,31 @@ internal sealed class TrayIconRegistration
     }
 }
 
-/// <summary>Initial attempt plus five timed retries; animation/refresh cannot bypass the gate.</summary>
+/// <summary>Fast recovery first, then one retry a minute until the Shell is reachable.</summary>
 internal sealed class TrayRegistrationRetry
 {
     private static readonly int[] Delays = [1000, 2000, 5000, 10000, 30000];
     private int _failures;
     public bool IsWaiting { get; private set; }
-    public bool IsExhausted { get; private set; }
-    public bool CanAttempt => !IsWaiting && !IsExhausted;
+    public bool IsSlow => _failures > Delays.Length;
+    public bool CanAttempt => !IsWaiting;
 
     public int? Failed()
     {
         if (!CanAttempt) return null;
-        if (_failures >= Delays.Length)
-        {
-            IsExhausted = true;
-            return null;
-        }
         IsWaiting = true;
-        return Delays[_failures++];
+        if (_failures < Delays.Length) return Delays[_failures++];
+        _failures = Delays.Length + 1;
+        return 60000;
+    }
+
+    public int ScheduleRecovery()
+    {
+        _failures = 0;
+        IsWaiting = true;
+        return 1000;
     }
 
     public void TimerElapsed() => IsWaiting = false;
-    public void Reset() { _failures = 0; IsWaiting = false; IsExhausted = false; }
+    public void Reset() { _failures = 0; IsWaiting = false; }
 }
