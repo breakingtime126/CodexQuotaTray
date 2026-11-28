@@ -55,6 +55,7 @@ internal static class DesktopRuntimeDiscovery
             var localApplicationData = evidence.LocalApplicationData;
             var runtimePaths = evidence.ExistingRuntimePaths(localApplicationData)
                 .Take(MaximumRuntimeDirectories + 1).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var sizeMismatches = 0;
             foreach (var path in runtimePaths)
             {
                 examined++;
@@ -62,7 +63,18 @@ internal static class DesktopRuntimeDiscovery
                     throw Reject(SourceBackendExclusion.DesktopUnsafePath);
                 try
                 {
-                    using var runtime = evidence.OpenImage(path, anchorIdentity);
+                    using var runtime = evidence.OpenImage(path);
+                    ValidateImage(runtime.Identity);
+                    if (runtime.Identity.Length != anchorIdentity.Length)
+                    {
+                        sizeMismatches++;
+                        excluded++;
+                        exclusions |= SourceBackendExclusion.DesktopRuntimeUnverified;
+                        exclusionCode = null;
+                        exclusionDesktop = new(DesktopEvidenceStep.ImageRead, DesktopEvidenceLocation.RuntimeImage)
+                        { ImageBytes = runtime.Identity.Length };
+                        continue;
+                    }
                     ValidateMatch(anchorIdentity, runtime.Identity);
                     return Candidate(path, SourceBackendLocation.DesktopExistingRuntime,
                         SourceBackendIdentityEvidence.RegisteredPackageMetadata);
@@ -86,9 +98,10 @@ internal static class DesktopRuntimeDiscovery
                     exclusionDesktop = error.Desktop;
                 }
             }
-            // A present but unverifiable runtime must not cause a launch of the inaccessible
-            // package image. No candidates are retried after a launch failure either.
-            if (runtimePaths.Length != 0)
+            // An update can leave only older, readable x64 caches. Never start those
+            // files; reuse the already verified current package candidate instead.
+            // Any other unresolved runtime evidence still fails closed.
+            if (runtimePaths.Length != sizeMismatches)
                 return new(null, examined, excluded, exclusions, exclusionCode) { Desktop = exclusionDesktop };
             return Candidate(resourcePath, SourceBackendLocation.DesktopPackageResource,
                 SourceBackendIdentityEvidence.RegisteredDesktopPackage);

@@ -60,7 +60,6 @@ internal static class DesktopRuntimeDiscoveryTests
         });
         foreach (var (name, transform, exclusion) in new (string, Func<DesktopImageIdentity, DesktopImageIdentity>, SourceBackendExclusion)[]
         {
-            ("size mismatch", identity => identity with { Length = identity.Length + 1 }, SourceBackendExclusion.DesktopRuntimeUnverified),
             ("PE mismatch", identity => identity with { FileVersion = new Version(9, 9, 9, 0) }, SourceBackendExclusion.DesktopVersionMismatch),
             ("one absent PE", identity => identity with { FileVersion = null }, SourceBackendExclusion.DesktopVersionMismatch),
             ("oversized image", identity => identity with { Length = DesktopRuntimeDiscovery.MaximumImageBytes + 1 }, SourceBackendExclusion.DesktopRuntimeUnverified),
@@ -74,6 +73,41 @@ internal static class DesktopRuntimeDiscoveryTests
                 Check.True((result.Exclusions & exclusion) != 0);
                 Check.Equal(0, evidence.ActiveLeases);
             });
+        test("Desktop runtime: two stale sizes select only the registered package resource", () =>
+        {
+            using var evidence = new FakeEvidence();
+            var sibling = evidence.AddRuntime("0123456789abcdef");
+            evidence.RuntimePaths = [evidence.Runtime, sibling];
+            evidence.Anchor = new(408218928, null);
+            evidence.RuntimeImage = new(245812016, new Version(0, 130, 0, 0));
+            evidence.Images[sibling] = new(369018160, null);
+            var result = DesktopRuntimeDiscovery.Discover(evidence);
+            var candidate = result.Candidate!;
+            Check.Equal(evidence.Resource, candidate.StartInfo.FileName);
+            Check.Equal(SourceBackendLocation.DesktopPackageResource, candidate.Location);
+            Check.Equal(SourceBackendIdentityEvidence.RegisteredDesktopPackage, candidate.IdentityEvidence);
+            Check.Equal(3, result.Examined);
+            Check.Equal(2, result.Excluded);
+            Check.Equal(SourceBackendExclusion.DesktopRuntimeUnverified, result.Exclusions);
+            var reopened = new List<string>();
+            evidence.OnImageOpen = reopened.Add;
+            using (candidate.AcquireLaunchLease!()) Check.Equal(1, evidence.ActiveLeases);
+            Check.True(reopened.SequenceEqual(new[] { evidence.Resource }));
+            evidence.ManifestValid = false;
+            Check.Throws<DesktopRuntimeValidationException>(() => candidate.AcquireLaunchLease!().Dispose());
+            Check.Equal(0, evidence.ActiveLeases);
+        });
+        test("Desktop runtime: a size mismatch does not hide an unverified same-size sibling", () =>
+        {
+            using var evidence = new FakeEvidence();
+            var sibling = evidence.AddRuntime("0123456789abcdef");
+            evidence.RuntimePaths = [evidence.Runtime, sibling];
+            evidence.RuntimeImage = evidence.Anchor with { Length = evidence.Anchor.Length + 1 };
+            evidence.RuntimeFailures[sibling] = new(SourceBackendExclusion.DesktopRuntimeUnverified);
+            var result = DesktopRuntimeDiscovery.Discover(evidence);
+            Check.Null(result.Candidate);
+            Check.Equal(2, result.Excluded);
+        });
         test("Desktop runtime: an invalid package image size prevents runtime reads", () =>
         {
             using var evidence = new FakeEvidence();
@@ -359,7 +393,7 @@ internal static class DesktopRuntimeDiscoveryTests
         asyncTest("Desktop runtime: verification failure is unavailable and contains no private evidence", async () =>
         {
             using var evidence = new FakeEvidence();
-            evidence.RuntimeImage = evidence.Anchor with { Length = evidence.Anchor.Length + 1 };
+            evidence.RuntimeOpenFailure = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopRuntimeUnverified);
             var traces = new List<SourceBackendDiagnostic>();
             var diagnostics = new List<CliDiagnostic>();
             var result = await new CodexQuotaClient(QuotaDataSource.Desktop, () => DesktopRuntimeDiscovery.Discover(evidence),
