@@ -103,7 +103,7 @@ internal static class DesktopRuntimeDiscoveryTests
             var sibling = evidence.AddRuntime("0123456789abcdef");
             evidence.RuntimePaths = [evidence.Runtime, sibling];
             evidence.RuntimeImage = evidence.Anchor with { Length = evidence.Anchor.Length + 1 };
-            evidence.RuntimeFailures[sibling] = new(SourceBackendExclusion.DesktopRuntimeUnverified);
+            evidence.RuntimeFailures[sibling] = new DesktopRuntimeValidationException(SourceBackendExclusion.DesktopRuntimeUnverified);
             var result = DesktopRuntimeDiscovery.Discover(evidence);
             Check.Null(result.Candidate);
             Check.Equal(2, result.Excluded);
